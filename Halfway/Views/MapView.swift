@@ -25,6 +25,9 @@ struct MapView: UIViewRepresentable {
         // Improve map appearance
         mapView.pointOfInterestFilter = .excludingAll // Hide default POIs for cleaner look
         
+        // Set up user tracking - start tracking user location immediately
+        mapView.userTrackingMode = .follow
+        
         // Setup gesture recognizers to track user interaction
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapPan(_:)))
         let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapPinch(_:)))
@@ -65,8 +68,13 @@ struct MapView: UIViewRepresentable {
             return
         }
         
-        // Only set region if user hasn't interacted with map or isExpanded has changed
-        if !context.coordinator.userInteracted || context.coordinator.lastExpandedState != isExpanded {
+        // For mini-map, always maintain the same region as the main map
+        if !isExpanded {
+            mapView.setRegion(region, animated: false)
+            context.coordinator.lastExpandedState = isExpanded
+        } 
+        // Only set region for the main map if user hasn't interacted or isExpanded has changed
+        else if !context.coordinator.userInteracted || context.coordinator.lastExpandedState != isExpanded {
             if isExpanded {
                 // Calculate region to show all points when in expanded mode
                 var allPoints: [CLLocationCoordinate2D] = []
@@ -148,6 +156,13 @@ struct MapView: UIViewRepresentable {
                 places: places,
                 searchRadius: searchRadius
             )
+        }
+        
+        // Update region binding when map changes (for consistency between main and mini map)
+        if context.coordinator.userInteracted {
+            DispatchQueue.main.async {
+                self.region = mapView.region
+            }
         }
     }
     

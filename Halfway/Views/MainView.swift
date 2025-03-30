@@ -86,9 +86,7 @@ struct MainView: View {
                             if viewModel.location1 != nil || viewModel.location2 != nil {
                                 Button(action: {
                                     withAnimation {
-                                        resetLocations = true
-                                        viewModel.clearLocation1()
-                                        viewModel.clearLocation2()
+                                        // Modified: Instead of clearing everything, just clear places to return to search
                                         viewModel.places = []
                                     }
                                 }) {
@@ -379,6 +377,9 @@ struct ResultsPanel: View {
     var mapType: MKMapType
     
     @State private var showAllPlaces = false
+    // Add state for drag gesture
+    @State private var dragState = CGSize.zero
+    @State private var isDragging = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -551,7 +552,7 @@ struct ResultsPanel: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
                 
-                // Redesigned place cards with better scrolling
+                // Redesigned place cards with better scrolling - fix to ensure cards are visible
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(spacing: 16) {
                         if viewModel.places.isEmpty {
@@ -578,8 +579,9 @@ struct ResultsPanel: View {
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                 }
-                // Ensure enough space to see cards
-                .frame(minHeight: 250)
+                // Ensure proper height for scroll view content
+                .frame(maxHeight: UIScreen.main.bounds.height * 0.4)
+                .padding(.bottom, 20) // Add bottom padding to ensure content goes all the way to bottom
             }
             .padding(.horizontal, 20) // Add padding for floating card effect similar to search panel
             .background(
@@ -587,9 +589,36 @@ struct ResultsPanel: View {
                     .fill(Color(UIColor.systemBackground))
                     .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: -5)
             )
+            .offset(y: dragState.height)
+            // Add drag gesture to allow returning to search
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        isDragging = true
+                        // Only allow dragging down
+                        let newHeight = max(0, value.translation.height)
+                        dragState = CGSize(width: 0, height: newHeight)
+                    }
+                    .onEnded { value in
+                        isDragging = false
+                        // If dragged down far enough, return to search screen
+                        if dragState.height > 100 {
+                            withAnimation(.spring()) {
+                                // Clear places but keep locations
+                                viewModel.places = []
+                            }
+                        } else {
+                            // Snap back
+                            withAnimation(.spring()) {
+                                dragState = .zero
+                            }
+                        }
+                    }
+            )
         }
         // Fixed height without dragging
-        .frame(maxHeight: UIScreen.main.bounds.height * 0.85)
+        .frame(maxHeight: UIScreen.main.bounds.height * 0.9) // Increase to ensure it extends to bottom
+        .edgesIgnoringSafeArea(.bottom)
     }
     
     private func distance(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> CLLocationDistance {
