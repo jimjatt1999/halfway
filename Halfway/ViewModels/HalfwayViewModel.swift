@@ -57,6 +57,11 @@ class HalfwayViewModel: ObservableObject {
     
     // MARK: - Public Methods
     
+    // Add a computed property to safely access user location
+    var userLocation: CLLocation? {
+        return locationManager.userLocation
+    }
+    
     func setLocation1(_ location: Location) {
         self.location1 = location
         calculateMidpointIfPossible()

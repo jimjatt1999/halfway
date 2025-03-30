@@ -8,18 +8,17 @@ struct MainView: View {
     @State private var isLocationSearching = false
     @State private var searchFor: Int = 1 // 1 for location1, 2 for location2
     @State private var mapRegion = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503),
+        center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to SF, will update to user location
         span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
     )
     @State private var showingErrorAlert = false
     @State private var isExpanded = false
     @State private var resetLocations = false
     @State private var mapType: MKMapType = .standard
-    @State private var dragState = CGSize.zero
     @State private var draggedOffset: CGFloat = 0
     
-    // Minimum height for the results panel
-    let minDragHeight: CGFloat = 450
+    // Minimum height for the results panel - increased for better initial visibility
+    let minDragHeight: CGFloat = 550 // Changed from 450 to 550 for more screen coverage initially
     // Maximum height for the results panel (will be calculated from screen height)
     var maxDragHeight: CGFloat {
         UIScreen.main.bounds.height * 0.85
@@ -125,10 +124,10 @@ struct MainView: View {
                             isExpanded: $isExpanded,
                             dragOffset: $draggedOffset,
                             minHeight: minDragHeight,
-                            maxHeight: maxDragHeight
+                            maxHeight: maxDragHeight,
+                            mapType: mapType
                         )
                         .transition(.move(edge: .bottom))
-                        .animation(.spring(), value: draggedOffset)
                     }
                 }
             } else {
@@ -240,6 +239,15 @@ struct MainView: View {
             // Real-time updates for search radius changes
             if !viewModel.places.isEmpty {
                 viewModel.searchPlacesAroundMidpoint()
+            }
+        }
+        .onAppear {
+            // Set initial map region to user's location if available
+            if let userLocation = viewModel.userLocation?.coordinate {
+                mapRegion = MKCoordinateRegion(
+                    center: userLocation,
+                    span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+                )
             }
         }
     }
@@ -359,7 +367,7 @@ struct MainView: View {
     }
 }
 
-// Redesigned Draggable Results Panel
+// Replace ResultsPanel struct with a simpler version without dragging
 struct ResultsPanel: View {
     var viewModel: HalfwayViewModel
     @Binding var resetLocations: Bool
@@ -368,16 +376,15 @@ struct ResultsPanel: View {
     @Binding var dragOffset: CGFloat
     var minHeight: CGFloat
     var maxHeight: CGFloat
+    var mapType: MKMapType
     
-    @State private var dragState = CGSize.zero
-    @State private var contentHeight: CGFloat = 0
     @State private var showAllPlaces = false
     
     var body: some View {
         VStack(spacing: 0) {
             // Floating card similar to search panel (not stretched to edges)
             VStack(spacing: 0) {
-                // Drag indicator at the top
+                // Keep drag indicator for visual consistency but it won't function
                 RoundedRectangle(cornerRadius: 2.5)
                     .fill(Color.gray.opacity(0.4))
                     .frame(width: 40, height: 5)
@@ -401,41 +408,39 @@ struct ResultsPanel: View {
                 .padding(.top, 4)
                 .padding(.bottom, 8)
                 
-                // MOVED UP: Mini map is now positioned higher in the panel
                 // Mini map area to show overview
                 ZStack {
                     MapView(region: $mapRegion, 
                             location1: viewModel.location1, 
                             location2: viewModel.location2, 
                             midpoint: viewModel.midpoint,
-                            places: [],
+                            places: viewModel.places, // Show all places on mini map
                             searchRadius: viewModel.searchRadius,
                             selectedPlace: Binding(
                                 get: { viewModel.showingPlaceDetail },
                                 set: { viewModel.showingPlaceDetail = $0 }
                             ),
-                            resetLocations: $resetLocations)
+                            isExpanded: false,
+                            resetLocations: $resetLocations,
+                            mapType: mapType)
                         .frame(height: 160)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                        )
                         .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
                     
-                    // Overlay text for map expansion
+                    // Overlay text for map expansion with improved visibility
                     VStack {
                         Spacer()
                         HStack {
                             Spacer()
                             Text("Tap to expand map")
-                                .font(.caption)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
                                 .foregroundColor(.white)
-                                .padding(.vertical, 6)
-                                .padding(.horizontal, 10)
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(8)
-                                .padding(8)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 14)
+                                .background(Color.black.opacity(0.7))
+                                .cornerRadius(10)
+                                .padding(12)
                         }
                     }
                 }
@@ -472,8 +477,12 @@ struct ResultsPanel: View {
                     
                     Slider(value: Binding(
                         get: { viewModel.searchRadius },
-                        set: { viewModel.searchRadius = $0 }
-                    ), in: 0.5...5.0, step: 0.1) // Changed from step: 0.5 to 0.1 for smoother real-time updates
+                        set: { 
+                            viewModel.searchRadius = $0
+                            // Immediate update when slider changes
+                            viewModel.searchPlacesAroundMidpoint()
+                        }
+                    ), in: 0.5...5.0, step: 0.1)
                         .padding(.horizontal, 20)
                         .accentColor(.indigo)
                 }
@@ -542,7 +551,6 @@ struct ResultsPanel: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
                 
-                // FIXED: Made sure places list is visible and properly clickable
                 // Redesigned place cards with better scrolling
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(spacing: 16) {
@@ -557,54 +565,46 @@ struct ResultsPanel: View {
                             .padding(.vertical, 24)
                         } else {
                             ForEach(viewModel.places.prefix(showAllPlaces ? viewModel.places.count : min(3, viewModel.places.count))) { place in
-                                ImprovedPlaceCard(place: place, location1: viewModel.location1, location2: viewModel.location2, midpoint: viewModel.midpoint)
-                                    .contentShape(Rectangle()) // Makes the entire card tappable
-                                    .onTapGesture {
-                                        viewModel.showingPlaceDetail = place
-                                    }
+                                Button(action: {
+                                    // Immediately show detail view when tapped
+                                    viewModel.showingPlaceDetail = place
+                                }) {
+                                    ImprovedPlaceCard(place: place, location1: viewModel.location1, location2: viewModel.location2, midpoint: viewModel.midpoint)
+                                }
+                                .buttonStyle(ScalingButtonStyle()) // Custom button style for better tap feedback
                             }
                         }
                     }
                     .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 12)
                 }
-                // Ensure the scroll view takes available space
-                .frame(minHeight: 200, maxHeight: .infinity)
+                // Ensure enough space to see cards
+                .frame(minHeight: 250)
             }
-            .padding(.horizontal, 12) // Add padding for floating card effect
+            .padding(.horizontal, 20) // Add padding for floating card effect similar to search panel
             .background(
                 RoundedRectangle(cornerRadius: 24)
                     .fill(Color(UIColor.systemBackground))
                     .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: -5)
             )
         }
-        .frame(height: minHeight + dragOffset)
-        .cornerRadius(24, corners: [.topLeft, .topRight])
-        .offset(y: dragState.height)
-        .gesture(
-            DragGesture()
-                .onChanged { gesture in
-                    let newHeight = -gesture.translation.height + dragOffset
-                    if newHeight >= 0 && newHeight <= maxHeight - minHeight {
-                        dragState = gesture.translation
-                    }
-                }
-                .onEnded { gesture in
-                    dragOffset = -gesture.translation.height + dragOffset
-                    if dragOffset < 0 {
-                        dragOffset = 0
-                    } else if dragOffset > maxHeight - minHeight {
-                        dragOffset = maxHeight - minHeight
-                    }
-                    dragState = .zero
-                }
-        )
+        // Fixed height without dragging
+        .frame(maxHeight: UIScreen.main.bounds.height * 0.85)
     }
     
     private func distance(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> CLLocationDistance {
         let from = CLLocation(latitude: from.latitude, longitude: from.longitude)
         let to = CLLocation(latitude: to.latitude, longitude: to.longitude)
         return from.distance(from: to)
+    }
+}
+
+// Custom button style for better tap feedback
+struct ScalingButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.easeInOut(duration: 0.2), value: configuration.isPressed)
     }
 }
 
@@ -615,7 +615,6 @@ struct ImprovedPlaceCard: View {
     let location2: Location?
     let midpoint: CLLocationCoordinate2D?
     @Environment(\.colorScheme) var colorScheme
-    @State private var isPressed = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -689,26 +688,13 @@ struct ImprovedPlaceCard: View {
                 .stroke(Color.gray.opacity(0.2), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.3 : 0.05), radius: 8, x: 0, y: 2)
-        .scaleEffect(isPressed ? 0.98 : 1.0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
-        .onTapGesture {
-            // Add press animation
-            withAnimation(.spring(response: 0.2)) {
-                isPressed = true
-            }
-            
-            // Reset after brief delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                withAnimation {
-                    isPressed = false
-                }
-            }
-        }
+        .contentShape(Rectangle()) // Make entire card tappable
     }
     
     // Unified travel time view for consistency
     private func locationTravelTimeView(name: String, drivingTime: Int?, walkingTime: Int?, iconColor: Color) -> some View {
         VStack(alignment: .center, spacing: 4) {
+            // Unified styling for location names (including Current Location)
             Text(String(name.prefix(10)))
                 .font(.caption)
                 .lineLimit(1)

@@ -23,8 +23,10 @@ struct PlaceRow: View {
                     Text(place.name)
                         .font(.headline)
                     
-                    if let midpoint = midpoint {
-                        Text("\(formatDistance(place.distanceFromMidpoint)) from midpoint")
+                    if midpoint != nil {
+                        let distance = place.distanceFromMidpoint
+                        let formattedDistance = formatDistance(distance)
+                        Text("\(formattedDistance) from midpoint")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

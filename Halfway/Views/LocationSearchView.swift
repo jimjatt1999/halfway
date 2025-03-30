@@ -2,17 +2,16 @@ import SwiftUI
 import MapKit
 
 struct LocationSearchView: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var searchResults: [MKMapItem] = []
+    @Environment(\.presentationMode) var presentationMode
     @State private var searchText: String
+    @State private var searchResults: [Location] = []
     @State private var isSearching = false
-    @State private var searchError: String?
     
     var onLocationSelected: (Location) -> Void
     var onUseCurrentLocation: () -> Void
     
     init(searchText: String, onLocationSelected: @escaping (Location) -> Void, onUseCurrentLocation: @escaping () -> Void) {
-        self._searchText = State(initialValue: searchText)
+        _searchText = State(initialValue: searchText)
         self.onLocationSelected = onLocationSelected
         self.onUseCurrentLocation = onUseCurrentLocation
     }
@@ -22,191 +21,141 @@ struct LocationSearchView: View {
             // Search header
             HStack {
                 Button(action: {
-                    dismiss()
+                    presentationMode.wrappedValue.dismiss()
                 }) {
-                    Image(systemName: "chevron.left")
-                        .font(.title3)
+                    Image(systemName: "xmark")
                         .foregroundColor(.primary)
-                        .padding()
+                        .padding(10)
+                        .background(Color(UIColor.secondarySystemBackground))
+                        .clipShape(Circle())
                 }
                 
-                TextField("Search locations", text: $searchText)
-                    .padding(8)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
+                // Improved search field with immediate responsiveness
+                TextField("Search for a location", text: $searchText)
+                    .padding(10)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(10)
+                    .padding(.leading, 4)
+                    .autocorrectionDisabled(true) // Disable autocorrection for faster typing
+                    .disableAutocorrection(true) // For backward compatibility
+                    // Remove debouncing to ensure immediate typing responsiveness
                     .onChange(of: searchText) { newValue in
-                        // Debounce search
-                        if newValue.count > 2 {
-                            searchLocations()
-                        } else if newValue.isEmpty {
+                        if !newValue.isEmpty {
+                            performSearch(query: newValue)
+                        } else {
                             searchResults = []
                         }
                     }
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
-                
-                if !searchText.isEmpty {
-                    Button(action: {
-                        searchText = ""
-                        searchResults = []
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
-                            .padding(.trailing, 8)
-                    }
-                }
             }
-            .padding(.vertical, 8)
             .padding(.horizontal)
-            .background(Color.white)
+            .padding(.vertical, 10)
             
-            // Use current location button
+            // Current location button
             Button(action: {
                 onUseCurrentLocation()
-                dismiss()
+                presentationMode.wrappedValue.dismiss()
             }) {
                 HStack {
                     Image(systemName: "location.fill")
                         .foregroundColor(.blue)
-                    Text("Current Location")
+                    Text("Use Current Location")
                         .foregroundColor(.primary)
                     Spacer()
                 }
                 .padding()
-                .background(Color.white)
-            }
-            .padding(.top, 1)
-            
-            if searchError != nil {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(.red)
-                    Text(searchError!)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                    Spacer()
-                }
-                .padding()
-                .background(Color.white)
+                .background(Color(UIColor.secondarySystemBackground))
+                .cornerRadius(10)
+                .padding(.horizontal)
+                .padding(.top, 10)
             }
             
+            // Divider
+            Divider()
+                .padding(.top, 10)
+            
+            // Loading indicator
             if isSearching {
-                Spacer()
-                ProgressView("Searching...")
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
                     .padding()
-                Spacer()
-            } else if searchResults.isEmpty && !searchText.isEmpty && searchError == nil {
-                VStack {
-                    Spacer()
-                    Text("No results found")
-                        .foregroundColor(.secondary)
-                    Text("Try a different search term")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding()
-            } else {
-                // Search results
-                List {
-                    ForEach(searchResults, id: \.self) { item in
+            }
+            
+            // Search results
+            ScrollView {
+                LazyVStack(alignment: .leading) {
+                    ForEach(searchResults, id: \.self) { location in
                         Button(action: {
-                            let location = Location(
-                                name: item.name ?? item.placemark.title ?? "Unknown Place",
-                                coordinate: item.placemark.coordinate
-                            )
                             onLocationSelected(location)
+                            presentationMode.wrappedValue.dismiss()
                         }) {
-                            HStack {
-                                Image(systemName: "mappin.circle.fill")
-                                    .foregroundColor(.blue)
-                                    .font(.title3)
-                                
-                                VStack(alignment: .leading) {
-                                    Text(item.name ?? "Unknown Place")
-                                        .font(.headline)
-                                    
-                                    Text(formatAddress(item.placemark))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
-                                }
-                            }
-                            .contentShape(Rectangle())
+                            LocationRow(location: location)
                         }
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
-                .listStyle(PlainListStyle())
+                .padding(.horizontal)
             }
+            
+            Spacer()
         }
+        .navigationBarHidden(true)
     }
     
-    private func searchLocations() {
-        guard !searchText.isEmpty else {
-            searchResults = []
-            return
-        }
-        
+    private func performSearch(query: String) {
         isSearching = true
-        searchError = nil
         
+        // Use direct MKLocalSearch without debounce to prevent delay
         let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = searchText
-        request.resultTypes = [.address, .pointOfInterest]
+        request.naturalLanguageQuery = query
+        request.resultTypes = .pointOfInterest
         
         let search = MKLocalSearch(request: request)
         search.start { response, error in
             isSearching = false
             
-            if let error = error {
-                print("Error searching for locations: \(error.localizedDescription)")
-                searchError = "Search failed: \(error.localizedDescription)"
+            guard let response = response, error == nil else {
                 searchResults = []
                 return
             }
             
-            guard let response = response else {
-                searchError = "No results found"
-                searchResults = []
-                return
-            }
-            
-            // Limit to 15 results for better performance
-            self.searchResults = Array(response.mapItems.prefix(15))
-            
-            if self.searchResults.isEmpty {
-                // No results feedback is handled in the view
+            searchResults = response.mapItems.map { item in
+                Location(
+                    name: item.name ?? "Unknown Location",
+                    placemark: item.placemark,
+                    coordinate: item.placemark.coordinate
+                )
             }
         }
     }
+}
+
+struct LocationRow: View {
+    let location: Location
     
-    private func formatAddress(_ placemark: MKPlacemark) -> String {
-        var addressComponents: [String] = []
-        
-        if let subThoroughfare = placemark.subThoroughfare {
-            addressComponents.append(subThoroughfare)
-        }
-        
-        if let thoroughfare = placemark.thoroughfare {
-            addressComponents.append(thoroughfare)
-        }
-        
-        if let locality = placemark.locality {
-            addressComponents.append(locality)
-        }
-        
-        if let administrativeArea = placemark.administrativeArea {
-            addressComponents.append(administrativeArea)
-        }
-        
-        if addressComponents.isEmpty {
-            if let name = placemark.name {
-                return name
-            } else {
-                return "Unknown location"
+    var body: some View {
+        HStack {
+            Image(systemName: "mappin.circle.fill")
+                .foregroundColor(.red)
+                .font(.title2)
+            
+            VStack(alignment: .leading) {
+                Text(location.name)
+                    .font(.headline)
+                if let thoroughfare = location.placemark.thoroughfare,
+                   let locality = location.placemark.locality {
+                    Text("\(thoroughfare), \(locality)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else if let locality = location.placemark.locality {
+                    Text(locality)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
             }
+            
+            Spacer()
         }
-        
-        return addressComponents.joined(separator: ", ")
+        .contentShape(Rectangle()) // Make the entire row tappable
+        .padding(.vertical, 8)
     }
 } 

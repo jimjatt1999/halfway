@@ -346,7 +346,7 @@ struct MapView: UIViewRepresentable {
                 
                 // Check if this is a line to location1 or location2 and style accordingly
                 if let midpoint = parent.midpoint, let location1 = parent.location1, let location2 = parent.location2 {
-                    let midpointCoordinate = midpoint
+                    _ = midpoint
                     let point = polyline.points()[0]
                     let coordinate = CLLocationCoordinate2D(latitude: point.coordinate.latitude, longitude: point.coordinate.longitude)
                     
@@ -383,12 +383,25 @@ struct MapView: UIViewRepresentable {
         
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             if let placeAnnotation = view.annotation as? PlaceAnnotation {
-                parent.selectedPlace = placeAnnotation.place
+                // Update the selected place binding immediately
+                DispatchQueue.main.async {
+                    self.parent.selectedPlace = placeAnnotation.place
+                }
                 
                 // Add subtle animation to highlight selected place
                 UIView.animate(withDuration: 0.2, animations: {
                     view.transform = CGAffineTransform(scaleX: 1.2, y: 1.2)
                 })
+            }
+        }
+        
+        // Add this function to properly handle callout accessory taps
+        func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, calloutAccessoryControlTapped control: UIControl) {
+            if let placeAnnotation = view.annotation as? PlaceAnnotation {
+                // Update the selected place binding immediately
+                DispatchQueue.main.async {
+                    self.parent.selectedPlace = placeAnnotation.place
+                }
             }
         }
         
