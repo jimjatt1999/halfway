@@ -73,16 +73,13 @@ struct MapView: UIViewRepresentable {
         mapView.showsUserLocation = true
         mapView.mapType = mapType
         
+        // Enable nearby points of interest
+        mapView.pointOfInterestFilter = .includingAll
+        
         // Ensure map interaction is enabled
         mapView.isZoomEnabled = true
         mapView.isScrollEnabled = true
         mapView.isRotateEnabled = true
-        
-        // Improve map appearance
-        mapView.pointOfInterestFilter = .excludingAll // Hide default POIs for cleaner look
-        
-        // Set up user tracking - start tracking user location immediately
-        mapView.userTrackingMode = .follow
         
         // Setup gesture recognizers to track user interaction
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapPan(_:)))
@@ -91,6 +88,10 @@ struct MapView: UIViewRepresentable {
         // Add tap gesture recognizer for clearing locations
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
         tapGesture.numberOfTapsRequired = 2  // Double tap
+        
+        // Add long press gesture to copy coordinates
+        let longPressGesture = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
+        longPressGesture.minimumPressDuration = 0.8
         
         // Make sure the double tap doesn't interfere with zoom functionality
         for recognizer in mapView.gestureRecognizers ?? [] {
@@ -102,6 +103,7 @@ struct MapView: UIViewRepresentable {
         mapView.addGestureRecognizer(panGesture)
         mapView.addGestureRecognizer(pinchGesture)
         mapView.addGestureRecognizer(tapGesture)
+        mapView.addGestureRecognizer(longPressGesture)
         
         return mapView
     }
@@ -128,13 +130,19 @@ struct MapView: UIViewRepresentable {
         if !isExpanded {
             mapView.setRegion(region, animated: false)
             context.coordinator.lastExpandedState = isExpanded
+            // Disable user interaction for mini-map to keep it fixed
+            mapView.isZoomEnabled = false
+            mapView.isScrollEnabled = false
+            mapView.isRotateEnabled = false
         } 
         // Only set region for the main map if user hasn't interacted or isExpanded has changed
         else if !context.coordinator.userInteracted || context.coordinator.lastExpandedState != isExpanded {
             if isExpanded {
                 // Calculate region to show all points when in expanded mode
                 var allPoints: [CLLocationCoordinate2D] = []
-                if let midpoint = midpoint { allPoints.append(midpoint) }
+                if midpoint != nil {
+                    allPoints.append(midpoint!)
+                }
                 
                 // Add all locations' coordinates
                 if let locs = locations {
@@ -151,6 +159,11 @@ struct MapView: UIViewRepresentable {
                 } else {
                     mapView.setRegion(region, animated: true)
                 }
+                
+                // Re-enable user interaction for expanded view
+                mapView.isZoomEnabled = true
+                mapView.isScrollEnabled = true
+                mapView.isRotateEnabled = true
             } else {
                 mapView.setRegion(region, animated: true)
             }
@@ -286,6 +299,7 @@ struct MapView: UIViewRepresentable {
         var parent: MapView
         var userInteracted = false
         var lastExpandedState = false
+        private var notificationObserver: NSObjectProtocol?
         
         // Properties to track last state
         private var lastLocations: [Location] = []
@@ -298,6 +312,22 @@ struct MapView: UIViewRepresentable {
         init(_ parent: MapView) {
             self.parent = parent
             super.init()
+            
+            // Add observer for reset notification
+            notificationObserver = NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("ResetMapInteraction"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.userInteracted = false
+            }
+        }
+        
+        deinit {
+            // Remove observer when coordinator is deallocated
+            if let observer = notificationObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
         
         @objc func handleMapPan(_ gesture: UIPanGestureRecognizer) {
@@ -314,49 +344,170 @@ struct MapView: UIViewRepresentable {
                     // Signal to parent view that user wants to reset locations
                     self.parent.resetLocations = true
                     
-                    // Show improved toast message
-                    if let mapView = gesture.view as? MKMapView {
-                        let toastView = UIView()
-                        toastView.backgroundColor = UIColor.black.withAlphaComponent(0.7)
-                        toastView.layer.cornerRadius = 16
-                        toastView.clipsToBounds = true
-                        
-                        let label = UILabel()
-                        label.text = "Map cleared!"
-                        label.textColor = .white
-                        label.font = UIFont.systemFont(ofSize: 14, weight: .medium)
-                        label.textAlignment = .center
-                        
-                        toastView.addSubview(label)
-                        label.translatesAutoresizingMaskIntoConstraints = false
-                        NSLayoutConstraint.activate([
-                            label.centerXAnchor.constraint(equalTo: toastView.centerXAnchor),
-                            label.centerYAnchor.constraint(equalTo: toastView.centerYAnchor),
-                            label.leadingAnchor.constraint(equalTo: toastView.leadingAnchor, constant: 16),
-                            label.trailingAnchor.constraint(equalTo: toastView.trailingAnchor, constant: -16)
-                        ])
-                        
-                        toastView.frame = CGRect(x: 0, y: 0, width: 130, height: 36)
-                        toastView.center = CGPoint(x: mapView.center.x, y: mapView.center.y - 50)
-                        mapView.addSubview(toastView)
-                        
-                        // Fade in
-                        toastView.alpha = 0
-                        UIView.animate(withDuration: 0.2, animations: {
-                            toastView.alpha = 1
-                        })
-                        
-                        // Remove toast after delay with animation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            UIView.animate(withDuration: 0.3, animations: {
-                                toastView.alpha = 0
-                            }) { _ in
-                                toastView.removeFromSuperview()
+                    // No need to show a toast notification for this action
+                }
+            }
+        }
+        
+        @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+            if gesture.state == .began {
+                let mapView = gesture.view as! MKMapView
+                let location = gesture.location(in: mapView)
+                let coordinate = mapView.convert(location, toCoordinateFrom: mapView)
+                
+                // Create a context menu at the long press location
+                let alertController = UIAlertController(
+                    title: "Location Options",
+                    message: "Coordinates: \(coordinate.latitude), \(coordinate.longitude)",
+                    preferredStyle: .actionSheet
+                )
+                
+                // Add option to copy coordinates
+                alertController.addAction(UIAlertAction(title: "Copy Coordinates", style: .default) { _ in
+                    let coordinateString = "\(coordinate.latitude),\(coordinate.longitude)"
+                    UIPasteboard.general.string = coordinateString
+                    
+                    // Show toast notification
+                    self.showToast(message: "Coordinates copied!", in: mapView)
+                })
+                
+                // Add option to add as a location
+                alertController.addAction(UIAlertAction(title: "Add as Location", style: .default) { [weak self] _ in
+                    guard let self = self else { return }
+                    
+                    // Use reverse geocoding to get the address
+                    let geocoder = CLGeocoder()
+                    let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                    
+                    geocoder.reverseGeocodeLocation(location) { (placemarks, error) in
+                        if error == nil, let placemark = placemarks?.first {
+                            DispatchQueue.main.async {
+                                // Create a location from the placemark
+                                let name = self.formatPlacemarkAddress(placemark) ?? "Dropped Pin"
+                                let mkPlacemark = MKPlacemark(coordinate: coordinate)
+                                let location = Location(name: name, placemark: mkPlacemark, coordinate: coordinate)
+                                
+                                // Notify parent view to add this location (via a notification)
+                                NotificationCenter.default.post(
+                                    name: NSNotification.Name("AddLocationFromMap"),
+                                    object: location
+                                )
+                                
+                                // Show toast notification
+                                self.showToast(message: "Location added!", in: mapView)
+                            }
+                        } else {
+                            // If geocoding fails, use coordinates as the name
+                            DispatchQueue.main.async {
+                                let name = "Dropped Pin"
+                                let mkPlacemark = MKPlacemark(coordinate: coordinate)
+                                let location = Location(name: name, placemark: mkPlacemark, coordinate: coordinate)
+                                
+                                // Notify parent view to add this location
+                                NotificationCenter.default.post(
+                                    name: NSNotification.Name("AddLocationFromMap"),
+                                    object: location
+                                )
+                                
+                                // Show toast notification
+                                self.showToast(message: "Location added!", in: mapView)
                             }
                         }
                     }
+                })
+                
+                // Add option to open in Apple Maps
+                alertController.addAction(UIAlertAction(title: "Open in Maps", style: .default) { _ in
+                    let placemark = MKPlacemark(coordinate: coordinate)
+                    let mapItem = MKMapItem(placemark: placemark)
+                    mapItem.name = "Selected Location"
+                    mapItem.openInMaps()
+                })
+                
+                // Add cancel option
+                alertController.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+                
+                // For iPad: Set source for popover
+                if let popoverController = alertController.popoverPresentationController {
+                    popoverController.sourceView = mapView
+                    popoverController.sourceRect = CGRect(x: location.x, y: location.y, width: 0, height: 0)
+                }
+                
+                // Present the context menu
+                if let viewController = self.getViewControllerForView(mapView) {
+                    viewController.present(alertController, animated: true)
                 }
             }
+        }
+        
+        // Helper to get the parent view controller for a view
+        private func getViewControllerForView(_ view: UIView) -> UIViewController? {
+            var responder: UIResponder? = view
+            while responder != nil {
+                responder = responder?.next
+                if let viewController = responder as? UIViewController {
+                    return viewController
+                }
+            }
+            return nil
+        }
+        
+        // Helper to display toast message
+        private func showToast(message: String, in view: UIView) {
+            let toastView = UIView()
+            toastView.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+            toastView.layer.cornerRadius = 16
+            toastView.clipsToBounds = true
+            toastView.alpha = 0
+            
+            let label = UILabel()
+            label.text = message
+            label.textColor = .white
+            label.font = UIFont.systemFont(ofSize: 14, weight: .medium)
+            label.textAlignment = .center
+            
+            toastView.addSubview(label)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: toastView.centerXAnchor),
+                label.centerYAnchor.constraint(equalTo: toastView.centerYAnchor),
+                label.leadingAnchor.constraint(equalTo: toastView.leadingAnchor, constant: 16),
+                label.trailingAnchor.constraint(equalTo: toastView.trailingAnchor, constant: -16)
+            ])
+            
+            toastView.frame = CGRect(x: 0, y: 0, width: 150, height: 40)
+            toastView.center = CGPoint(x: view.center.x, y: view.center.y - 50)
+            view.addSubview(toastView)
+            
+            // Show and hide the toast with animation
+            UIView.animate(withDuration: 0.2, animations: {
+                toastView.alpha = 1
+            }) { _ in
+                UIView.animate(withDuration: 0.2, delay: 1.5, options: [], animations: {
+                    toastView.alpha = 0
+                }) { _ in
+                    toastView.removeFromSuperview()
+                }
+            }
+        }
+        
+        // Helper to format address from a placemark
+        private func formatPlacemarkAddress(_ placemark: CLPlacemark) -> String? {
+            var addressComponents: [String] = []
+            
+            if let name = placemark.name, !name.isEmpty {
+                addressComponents.append(name)
+            }
+            
+            if let thoroughfare = placemark.thoroughfare {
+                addressComponents.append(thoroughfare)
+            }
+            
+            if let locality = placemark.locality {
+                addressComponents.append(locality)
+            }
+            
+            return addressComponents.isEmpty ? nil : addressComponents.joined(separator: ", ")
         }
         
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -445,7 +596,7 @@ struct MapView: UIViewRepresentable {
                 let renderer = MKPolylineRenderer(polyline: polyline)
                 
                 // Determine which location this line connects to
-                if let midpoint = parent.midpoint {
+                if parent.midpoint != nil {
                     let startPoint = polyline.points()[0]
                     let startCoord = CLLocationCoordinate2D(
                         latitude: startPoint.coordinate.latitude,

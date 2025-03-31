@@ -33,6 +33,9 @@ class HalfwayViewModel: ObservableObject {
     @Published var isSearching: Bool = false
     @Published var searchText: String = ""
     @Published var errorMessage: String?
+    @Published var isFilteredPlacesLoading: Bool = false
+    @Published var keyboardVisible: Bool = false
+    @Published var selectedPlace: Place?
     
     // Filtered places by category
     private var allPlaces: [Place] = []
@@ -130,18 +133,6 @@ class HalfwayViewModel: ObservableObject {
         calculateMidpointIfPossible()
     }
     
-    // Clear all locations
-    func clearAllLocations() {
-        self.locations.removeAll()
-        self.midpoint = nil
-        self.places = []
-        self.filteredPlaces = []
-        self.allPlaces = []
-        self.selectedCategory = nil
-        self.searchText = ""
-        self.errorMessage = nil
-    }
-    
     // Legacy functions for backward compatibility
     func setLocation1(_ location: Location) {
         if locations.isEmpty {
@@ -150,7 +141,7 @@ class HalfwayViewModel: ObservableObject {
             locations[0] = location
         }
         self.errorMessage = nil // Clear errors when setting location
-        calculateMidpointIfPossible()
+        calculateMidpointIfPossible() // This won't auto-search now
     }
     
     func setLocation2(_ location: Location) {
@@ -163,7 +154,7 @@ class HalfwayViewModel: ObservableObject {
             locations[1] = location
         }
         self.errorMessage = nil // Clear errors when setting location
-        calculateMidpointIfPossible()
+        calculateMidpointIfPossible() // This won't auto-search now
     }
     
     func clearLocation1() {
@@ -172,20 +163,18 @@ class HalfwayViewModel: ObservableObject {
         }
         if locations.isEmpty {
             self.midpoint = nil
-            self.places = []
-            self.filteredPlaces = []
-            self.allPlaces = []
-            self.selectedCategory = nil
-            self.searchText = ""
+            // Don't clear results or reset filters - let the user do this explicitly
+            self.errorMessage = nil
+        } else {
+            // Recalculate midpoint but don't auto-search
+            calculateMidpointIfPossible()
         }
-        self.errorMessage = nil
-        calculateMidpointIfPossible()
     }
     
     func clearLocation2() {
         if locations.count > 1 {
             locations.remove(at: 1)
-            calculateMidpointIfPossible()
+            calculateMidpointIfPossible() // This won't auto-search now
         }
         self.errorMessage = nil
     }
@@ -268,10 +257,14 @@ class HalfwayViewModel: ObservableObject {
         // Filter synchronously for instant response
         self.filterPlacesWithCurrentSettings()
         
-        // If no results, start async search expansion
-        if self.filteredPlaces.isEmpty {
+        // If we have no results but have locations and there are no places matching the category,
+        // we might want to trigger a category-specific search but ONLY if we've already done an initial search
+        if self.filteredPlaces.isEmpty && !self.allPlaces.isEmpty && category != nil {
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                self?.expandSearchForCategory(category)
+                // Only trigger the expansion if we have a category selected and have no matching places
+                if let category = self?.selectedCategory {
+                    self?.expandSearchForCategory(category)
+                }
             }
         }
     }
@@ -294,10 +287,10 @@ class HalfwayViewModel: ObservableObject {
             return
         }
         
-        // Add to search queue and trigger search
+        // Add to search queue and trigger search, but preserve UI state
         DispatchQueue.main.async { [weak self] in
             self?.searchQueryQueue.insert(contentsOf: expansionQueries, at: 0)
-            self?.searchPlacesAroundMidpoint()
+            self?.searchPlacesAroundMidpoint(preserveUIState: true)
         }
     }
     
@@ -305,75 +298,140 @@ class HalfwayViewModel: ObservableObject {
     func filterPlacesWithCurrentSettings() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            
-            // Create local copies to prevent concurrent access issues
-            let searchText = self.searchText.lowercased()
+            // Create local copies to prevent any concurrent access issues
+            let searchText = self.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             let selectedCategory = self.selectedCategory
             let allPlaces = self.allPlaces
             
             let filtered: [Place]
             
+            // If search text is empty, just filter by category if one is selected
             if searchText.isEmpty {
-                // If no search text, just apply category filter
-                if let selectedCategory = selectedCategory {
-                    filtered = allPlaces.filter { $0.category == selectedCategory }
-                } else {
-                    filtered = allPlaces
+                filtered = allPlaces.filter { place in
+                    if selectedCategory == nil {
+                        return true
+                    } else {
+                        return place.category == selectedCategory
+                    }
                 }
             } else {
-                // If search text exists, apply both search and category filter
+                // Filter by both search text and category
                 filtered = allPlaces.filter { place in
-                    // Apply category filter if needed
-                    let passesCategory = selectedCategory == nil || place.category == selectedCategory
+                    // Category filter
+                    let categoryMatch = selectedCategory == nil || place.category == selectedCategory
                     
-                    // If it doesn't pass category filter, return early
-                    guard passesCategory else { return false }
+                    // Text search filter - check direct match first
+                    let nameMatch = place.name.lowercased().contains(searchText)
                     
-                    // Apply search text filter
-                    let placeName = place.name.lowercased()
-                    let categoryName = place.category.rawValue.lowercased()
-                    let thoroughfare = place.mapItem.placemark.thoroughfare?.lowercased() ?? ""
-                    let locality = place.mapItem.placemark.locality?.lowercased() ?? ""
+                    // Check if there's a match in the location details
+                    let locationMatch = place.mapItem.placemark.thoroughfare?.lowercased().contains(searchText) == true ||
+                                        place.mapItem.placemark.locality?.lowercased().contains(searchText) == true ||
+                                        place.mapItem.placemark.administrativeArea?.lowercased().contains(searchText) == true
                     
-                    return placeName.contains(searchText) || 
-                           categoryName.contains(searchText) || 
-                           thoroughfare.contains(searchText) ||
-                           locality.contains(searchText)
+                    // Check if the search text matches category names or generic terms
+                    let categoryTextMatch = self.matchesCategorySearch(searchText: searchText, place: place)
+                    
+                    return categoryMatch && (nameMatch || locationMatch || categoryTextMatch)
                 }
             }
             
-            // Update on main thread
+            // Update filtered places on main thread
             DispatchQueue.main.async {
-                // Even if filtered results are empty, we should still stay in the results panel
-                // if we're actively searching - never switch back to search panel during active search
                 self.filteredPlaces = filtered
-                
-                // Log the results state to help with debugging
-                print("Search: \"\(searchText)\", Category: \(selectedCategory?.rawValue ?? "all"), Results: \(filtered.count)")
+                self.isFilteredPlacesLoading = false
+                print("HalfwayViewModel: Filtered places: \(filtered.count) out of \(allPlaces.count)")
             }
         }
     }
     
-    // Add contextual matching helper
-    private func contextualMatch(term: String, place: Place) -> Bool {
-        let foodTerms: Set = ["food", "eat", "dining", "meal", "lunch", "dinner"]
-        let drinkTerms: Set = ["drink", "coffee", "tea", "beverage"]
-        
-        switch place.category {
-        case .restaurant, .cafe:
-            return foodTerms.contains(term) || drinkTerms.contains(term)
-        case .bar:
-            return drinkTerms.contains(term) || term == "bar"
-        case .park:
-            return term == "park" || term == "nature"
-        default:
-            return false
+    private func matchesCategorySearch(searchText: String, place: Place) -> Bool {
+        // Check for specific category names
+        if searchText == "restaurant" && place.category == .restaurant {
+            return true
         }
+        if (searchText == "cafe" || searchText == "coffee") && place.category == .cafe {
+            return true
+        }
+        if (searchText == "bar" || searchText == "pub") && place.category == .bar {
+            return true
+        }
+        if (searchText == "park" || searchText == "garden" || searchText == "outdoor") && place.category == .park {
+            return true
+        }
+        
+        // Check for groups of categories
+        if searchText == "food" || searchText == "eat" {
+            return place.category == .restaurant || place.category == .cafe
+        }
+        if searchText == "drink" {
+            return place.category == .cafe || place.category == .bar
+        }
+        
+        // General business types
+        let businessTypes = [
+            "restaurant": [PlaceCategory.restaurant],
+            "dining": [PlaceCategory.restaurant],
+            "lunch": [PlaceCategory.restaurant, PlaceCategory.cafe],
+            "dinner": [PlaceCategory.restaurant, PlaceCategory.bar],
+            "breakfast": [PlaceCategory.restaurant, PlaceCategory.cafe],
+            "brunch": [PlaceCategory.restaurant, PlaceCategory.cafe],
+            "coffee": [PlaceCategory.cafe],
+            "tea": [PlaceCategory.cafe],
+            "dessert": [PlaceCategory.cafe, PlaceCategory.restaurant],
+            "bakery": [PlaceCategory.cafe],
+            "drinks": [PlaceCategory.bar, PlaceCategory.cafe],
+            "pub": [PlaceCategory.bar],
+            "beer": [PlaceCategory.bar],
+            "wine": [PlaceCategory.bar],
+            "cocktails": [PlaceCategory.bar],
+            "nightlife": [PlaceCategory.bar],
+            "outdoors": [PlaceCategory.park],
+            "walking": [PlaceCategory.park],
+            "nature": [PlaceCategory.park],
+            "picnic": [PlaceCategory.park],
+            "recreation": [PlaceCategory.park],
+            "entertainment": [PlaceCategory.other],
+            "shopping": [PlaceCategory.other],
+            "retail": [PlaceCategory.other],
+            "store": [PlaceCategory.other],
+            "mall": [PlaceCategory.other],
+            "grocery": [PlaceCategory.other],
+            "gas": [PlaceCategory.other],
+            "fuel": [PlaceCategory.other],
+            "hotel": [PlaceCategory.other],
+            "motel": [PlaceCategory.other],
+            "lodging": [PlaceCategory.other],
+            "parking": [PlaceCategory.other],
+            "theater": [PlaceCategory.other],
+            "cinema": [PlaceCategory.other],
+            "gym": [PlaceCategory.other],
+            "fitness": [PlaceCategory.other],
+            "transportation": [PlaceCategory.other],
+            "train": [PlaceCategory.other],
+            "bus": [PlaceCategory.other],
+            "airport": [PlaceCategory.other],
+            "school": [PlaceCategory.other],
+            "college": [PlaceCategory.other],
+            "university": [PlaceCategory.other],
+            "hospital": [PlaceCategory.other],
+            "doctor": [PlaceCategory.other],
+            "pharmacy": [PlaceCategory.other],
+            "medical": [PlaceCategory.other],
+            "bank": [PlaceCategory.other],
+            "atm": [PlaceCategory.other],
+            "financial": [PlaceCategory.other]
+        ]
+        
+        if let categories = businessTypes[searchText], categories.contains(place.category) {
+            return true
+        }
+        
+        return false
     }
     
     // MARK: - Search Methods
     
-    func searchPlacesAroundMidpoint() {
+    func searchPlacesAroundMidpoint(preserveUIState: Bool = false) {
         guard let midpoint = midpoint else {
             return // Silent fail if no midpoint
         }
@@ -393,13 +451,15 @@ class HalfwayViewModel: ObservableObject {
         // Clear the search queue
         searchQueryQueue.removeAll()
         
-        // Start fresh
-        DispatchQueue.main.async {
-            self.places = []
-            self.filteredPlaces = []
-            self.allPlaces = []
-            self.selectedCategory = nil // Reset category when starting a new search
-            self.searchText = "" // Reset search text when starting a new search
+        // Only reset UI state if preserveUIState is false
+        if !preserveUIState {
+            DispatchQueue.main.async {
+                self.places = []
+                self.filteredPlaces = []
+                self.allPlaces = []
+                self.selectedCategory = nil // Reset category when starting a new search
+                self.searchText = "" // Reset search text when starting a new search
+            }
         }
         
         // Clear any pending direction requests
@@ -584,11 +644,6 @@ class HalfwayViewModel: ObservableObject {
             self.midpoint = locations[0].coordinate
             // Set a default search radius for single location
             self.maxSearchRadius = 5.0
-            
-            // After calculating midpoint, initiate search
-            DispatchQueue.main.async {
-                self.searchPlacesAroundMidpoint()
-            }
             return
         }
         
@@ -619,25 +674,24 @@ class HalfwayViewModel: ObservableObject {
         if self.searchRadius > self.maxSearchRadius {
             self.searchRadius = self.maxSearchRadius
         }
-        
-        // After calculating midpoint, initiate search
-        DispatchQueue.main.async {
-            self.searchPlacesAroundMidpoint()
-        }
     }
     
-    // Updated to handle multiple locations efficiently
+    // Updated to handle multiple locations efficiently with better performance
     private func queueDirectionRequestsForAllLocations() {
         guard !locations.isEmpty, !allPlaces.isEmpty else { return }
         
-        // Only process the top places to reduce API calls
-        let topPlaces = allPlaces.prefix(min(10, allPlaces.count))
+        // Reduce the number of places we process for better performance
+        let maxPlacesToProcess = locations.count <= 2 ? 10 : 5
+        let topPlaces = allPlaces.prefix(min(maxPlacesToProcess, allPlaces.count))
         
         // For each place, only request directions from each location once
         for place in topPlaces {
             // Cap the number of locations to avoid excessive API calls
-            let locationsToProcess = locations.prefix(min(5, locations.count))
+            let maxLocationsToProcess = min(5, locations.count)
+            let locationsToProcess = locations.prefix(maxLocationsToProcess)
             
+            // Priority calculations - if we have more than 2 locations, only get driving times
+            // for all locations to improve performance
             for (index, location) in locationsToProcess.enumerated() {
                 // Always get driving directions
                 let drivingRequest = DirectionRequest(
@@ -648,8 +702,9 @@ class HalfwayViewModel: ObservableObject {
                 )
                 directionRequestsQueue.append(drivingRequest)
                 
-                // Only get walking directions for the top 5 places
-                if topPlaces.prefix(5).contains(where: { $0.id == place.id }) {
+                // Only get walking directions for first 2 locations or top 3 places
+                // to dramatically improve performance with many locations
+                if (index < 2 || topPlaces.prefix(3).contains(where: { $0.id == place.id })) {
                     let walkingRequest = DirectionRequest(
                         placeId: place.id,
                         from: location.coordinate,
@@ -866,6 +921,14 @@ class HalfwayViewModel: ObservableObject {
         
         searchTextWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
+    }
+    
+    // Clear all locations without auto-searching
+    func clearAllLocations() {
+        self.locations.removeAll()
+        self.midpoint = nil
+        // Don't clear places or filters - let the user reset this explicitly by clicking search
+        self.errorMessage = nil
     }
 }
 
