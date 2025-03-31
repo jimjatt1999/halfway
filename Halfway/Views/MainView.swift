@@ -1,12 +1,13 @@
 import SwiftUI
 import MapKit
+import Combine
 
 struct MainView: View {
     @EnvironmentObject var locationManager: LocationManager
     @StateObject private var viewModel: HalfwayViewModel
     
     @State private var isLocationSearching = false
-    @State private var searchFor: Int = 1 // 1 for location1, 2 for location2
+    @State private var searchFor: Int = 0 // Using an Int to represent the location index
     @State private var mapRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to SF, will update to user location
         span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
@@ -16,6 +17,14 @@ struct MainView: View {
     @State private var resetLocations = false
     @State private var mapType: MKMapType = .standard
     @State private var draggedOffset: CGFloat = 0
+    @State private var searchText = ""
+    
+    // Animation states for the title
+    @State private var isTitleAnimating = false
+    @State private var halfOffset: CGFloat = 0
+    @State private var wayOffset: CGFloat = 0
+    @State private var titleScale: CGFloat = 1.0
+    @State private var titleOpacity: Double = 1.0
     
     // Minimum height for the results panel - increased for better initial visibility
     let minDragHeight: CGFloat = 550 // Changed from 450 to 550 for more screen coverage initially
@@ -24,19 +33,19 @@ struct MainView: View {
         UIScreen.main.bounds.height * 0.85
     }
     
-    init() {
-        let vm = HalfwayViewModel(locationManager: LocationManager())
-        _viewModel = StateObject(wrappedValue: vm)
+    @StateObject private var cancellableStore = CancellableStore()
+    
+    init(viewModel: HalfwayViewModel = HalfwayViewModel(locationManager: LocationManager())) {
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
     
     var body: some View {
         ZStack {
             // Map view with blur overlay when results are shown
             MapView(region: $mapRegion, 
-                    location1: viewModel.location1, 
-                    location2: viewModel.location2, 
+                    locations: viewModel.locations,
                     midpoint: viewModel.midpoint,
-                    places: viewModel.places,
+                    places: viewModel.filteredPlaces,
                     searchRadius: viewModel.searchRadius,
                     selectedPlace: $viewModel.showingPlaceDetail,
                     isExpanded: isExpanded,
@@ -45,7 +54,7 @@ struct MainView: View {
                 .edgesIgnoringSafeArea(.all)
             
             // Semi-transparent overlay when results are shown (creates subtle depth)
-            if !isExpanded && !viewModel.places.isEmpty {
+            if !isExpanded && !viewModel.filteredPlaces.isEmpty {
                 Color.black.opacity(0.15)
                     .edgesIgnoringSafeArea(.all)
             }
@@ -54,16 +63,50 @@ struct MainView: View {
                 VStack(spacing: 0) {
                     // App title and control buttons
                     HStack {
-                        Text("Halfway")
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .padding(.leading)
-                            .foregroundColor(.white)
-                            .shadow(radius: 2)
+                        // Animated title
+                        HStack(spacing: 0) {
+                            Text("Half")
+                                .font(.title)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .shadow(radius: 2)
+                                .offset(x: halfOffset)
+                                .scaleEffect(titleScale)
+                                .opacity(titleOpacity)
+                                
+                            Text("way")
+                                .font(.title)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .shadow(radius: 2)
+                                .offset(x: wayOffset)
+                                .scaleEffect(titleScale)
+                                .opacity(titleOpacity)
+                        }
+                        .contentShape(Rectangle()) // Make the entire area tappable
+                        .padding(.leading)
+                        .onTapGesture {
+                            animateTitle()
+                        }
                         
                         Spacer()
                         
                         HStack(spacing: 16) {
+                            // Add map type toggle button on home screen
+                            Button(action: {
+                                mapType = mapType == .standard ? .satellite : .standard
+                            }) {
+                                Image(systemName: mapType == .standard ? "globe" : "map")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .frame(width: 40, height: 40)
+                                    .background(
+                                        Circle()
+                                            .fill(Color.indigo)
+                                            .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                                    )
+                            }
+                            
                             // Expand button
                             Button(action: {
                                 withAnimation(.spring(duration: 0.3)) {
@@ -82,11 +125,11 @@ struct MainView: View {
                             }
                             
                             // Only show reset button when locations exist
-                            // Remove the search icon as requested - only show expand and reset buttons
                             if viewModel.location1 != nil || viewModel.location2 != nil {
                                 Button(action: {
                                     withAnimation {
                                         // Modified: Instead of clearing everything, just clear places to return to search
+                                        viewModel.filteredPlaces = []
                                         viewModel.places = []
                                     }
                                 }) {
@@ -109,7 +152,9 @@ struct MainView: View {
                     Spacer()
                     
                     // Content panel at the bottom
-                    if viewModel.midpoint == nil || viewModel.places.isEmpty {
+                    if (viewModel.midpoint == nil || viewModel.filteredPlaces.isEmpty) && 
+                       viewModel.searchText.isEmpty && // Only show search panel when not actively searching
+                       !viewModel.isSearching { // Make sure we're not in the middle of a search
                         // Redesigned floating search panel
                         searchPanel
                             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -123,9 +168,12 @@ struct MainView: View {
                             dragOffset: $draggedOffset,
                             minHeight: minDragHeight,
                             maxHeight: maxDragHeight,
-                            mapType: mapType
+                            mapType: mapType,
+                            searchText: $searchText
                         )
-                        .transition(.move(edge: .bottom))
+                        .transition(.opacity)
+                        .animation(.spring(), value: viewModel.filteredPlaces)
+                        .animation(.spring(), value: searchText)
                     }
                 }
             } else {
@@ -156,6 +204,7 @@ struct MainView: View {
                                     resetLocations = true
                                     viewModel.clearLocation1()
                                     viewModel.clearLocation2()
+                                    viewModel.filteredPlaces = []
                                     viewModel.places = []
                                     
                                     // Return to search view when clearing
@@ -210,33 +259,23 @@ struct MainView: View {
         }
         .sheet(isPresented: $isLocationSearching) {
             LocationSearchView(searchText: "", onLocationSelected: { location in
-                if searchFor == 1 {
-                    viewModel.setLocation1(location)
+                if searchFor < viewModel.locations.count {
+                    viewModel.setLocation(at: searchFor, to: location)
                 } else {
-                    viewModel.setLocation2(location)
+                    viewModel.addLocation(location)
                 }
                 isLocationSearching = false
             }, onUseCurrentLocation: {
-                if searchFor == 1 {
-                    viewModel.useCurrentLocationFor1()
-                } else {
-                    viewModel.useCurrentLocationFor2()
-                }
+                viewModel.useCurrentLocation(at: searchFor)
                 isLocationSearching = false
             })
         }
         .sheet(item: $viewModel.showingPlaceDetail) { place in
-            PlaceDetailView(place: place, location1: viewModel.location1, location2: viewModel.location2)
+            PlaceDetailView(place: place, locations: viewModel.locations)
         }
         .alert(viewModel.errorMessage ?? "An error occurred", isPresented: .constant(viewModel.errorMessage != nil)) {
             Button("OK") {
                 viewModel.errorMessage = nil
-            }
-        }
-        .onChange(of: viewModel.searchRadius) { newValue in
-            // Real-time updates for search radius changes
-            if !viewModel.places.isEmpty {
-                viewModel.searchPlacesAroundMidpoint()
             }
         }
         .onAppear {
@@ -246,6 +285,56 @@ struct MainView: View {
                     center: userLocation,
                     span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
                 )
+            }
+            
+            // Add publisher to observe midpoint changes
+            viewModel.$midpoint
+                .compactMap { $0 } // Only proceed when midpoint is not nil
+                .sink { midpoint in
+                    // Update map region when midpoint changes
+                    withAnimation {
+                        self.mapRegion = MKCoordinateRegion(
+                            center: midpoint,
+                            span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+                        )
+                    }
+                }
+                .store(in: &cancellableStore.set)
+        }
+    }
+    
+    // Function to handle the title animation
+    func animateTitle() {
+        guard !isTitleAnimating else { return }
+        
+        isTitleAnimating = true
+        
+        // First animation - separate the words
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.7, blendDuration: 0.2)) {
+            halfOffset = -20
+            wayOffset = 20
+            titleScale = 1.2
+        }
+        
+        // Second animation - bounce back with slight overshoot
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0.1)) {
+                halfOffset = -5
+                wayOffset = 5
+            }
+        }
+        
+        // Third animation - return to original state
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7, blendDuration: 0.1)) {
+                halfOffset = 0
+                wayOffset = 0
+                titleScale = 1.0
+            }
+            
+            // Reset animation state after animation completes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                isTitleAnimating = false
             }
         }
     }
@@ -262,35 +351,16 @@ struct MainView: View {
                 
                 // Location inputs with better styling
                 VStack(spacing: 12) {
-                    // Location 1
-                    locationInputButton(
-                        icon: "location.fill",
-                        iconColor: .blue,
-                        text: viewModel.location1?.name ?? "Enter first location",
-                        hasValue: viewModel.location1 != nil,
-                        action: {
-                            searchFor = 1
-                            isLocationSearching = true
-                        },
-                        clearAction: {
-                            viewModel.clearLocation1()
-                        }
-                    )
-                    
-                    // Location 2
-                    locationInputButton(
-                        icon: "figure.stand",
-                        iconColor: .green,
-                        text: viewModel.location2?.name ?? "Enter second location",
-                        hasValue: viewModel.location2 != nil,
-                        action: {
-                            searchFor = 2
-                            isLocationSearching = true
-                        },
-                        clearAction: {
-                            viewModel.clearLocation2()
-                        }
-                    )
+                    ForEach(0..<min(viewModel.locations.count + 1, viewModel.canAddLocation ? viewModel.locations.count + 1 : viewModel.locations.count), id: \.self) { index in
+                        let isNewLocation = index == viewModel.locations.count
+                        let location = isNewLocation ? nil : viewModel.locations[index]
+                        
+                        locationInputRow(
+                            index: index,
+                            location: location,
+                            isNewLocation: isNewLocation
+                        )
+                    }
                 }
                 
                 // Find Meeting Places button with improved styling
@@ -306,13 +376,13 @@ struct MainView: View {
                     .padding(.vertical, 14)
                     .background(
                         RoundedRectangle(cornerRadius: 14)
-                            .fill(viewModel.location1 == nil || viewModel.location2 == nil ? 
+                            .fill(viewModel.locations.isEmpty ? 
                                   Color.indigo.opacity(0.6) : Color.indigo)
                     )
                     .foregroundColor(.white)
                 }
-                .disabled(viewModel.location1 == nil || viewModel.location2 == nil)
-                .animation(.easeInOut(duration: 0.2), value: viewModel.location1 == nil || viewModel.location2 == nil)
+                .disabled(viewModel.locations.isEmpty)
+                .animation(.easeInOut(duration: 0.2), value: viewModel.locations.isEmpty)
             }
             .padding(20)
             .background(
@@ -325,7 +395,109 @@ struct MainView: View {
         }
     }
     
-    // Reusable location input button with improved styling
+    // Location input row with add/remove capabilities
+    func locationInputRow(index: Int, location: Location?, isNewLocation: Bool) -> some View {
+        HStack {
+            // Location icon with index number 
+            ZStack {
+                Circle()
+                    .fill(locationColor(for: index))
+                    .frame(width: 32, height: 32)
+                
+                if isNewLocation {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.white)
+                } else {
+                    Text("\(index + 1)")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.white)
+                }
+            }
+            
+            if isNewLocation {
+                // "Add location" button
+                Button(action: {
+                    isLocationSearching = true
+                    searchFor = index
+                }) {
+                    HStack {
+                        Text("Add another location")
+                            .font(.system(size: 15))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    .frame(height: 36)
+                    .padding(.horizontal, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(UIColor.secondarySystemBackground))
+                    )
+                }
+            } else {
+                // Location input button
+                Button(action: {
+                    searchFor = index
+                    isLocationSearching = true
+                }) {
+                    HStack {
+                        Text(location?.name ?? "Enter location")
+                            .lineLimit(1)
+                            .font(.system(size: 15))
+                            .foregroundColor(location != nil ? .primary : .secondary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    .frame(height: 36)
+                    .padding(.horizontal, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(UIColor.secondarySystemBackground))
+                    )
+                }
+                
+                // Menu for location options
+                Menu {
+                    Button(action: {
+                        searchFor = index
+                        isLocationSearching = true
+                    }) {
+                        Label("Change location", systemImage: "mappin")
+                    }
+                    
+                    Button(action: {
+                        viewModel.useCurrentLocation(at: index)
+                    }) {
+                        Label("Use current location", systemImage: "location.fill")
+                    }
+                    
+                    if viewModel.locations.count > 2 {
+                        Button(role: .destructive, action: {
+                            withAnimation {
+                                viewModel.removeLocation(at: index)
+                            }
+                        }) {
+                            Label("Remove", systemImage: "trash")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundColor(.gray)
+                        .font(.system(size: 20))
+                }
+                .padding(.leading, 4)
+            }
+        }
+    }
+    
+    // Helper to get location color based on index
+    func locationColor(for index: Int) -> Color {
+        let colors: [Color] = [.blue, .green, .purple, .orange, .pink]
+        return index < colors.count ? colors[index] : .gray
+    }
+    
+    // Reusable location input button with improved styling (keeping for backward compatibility)
     func locationInputButton(icon: String, iconColor: Color, text: String, hasValue: Bool, action: @escaping () -> Void, clearAction: @escaping () -> Void) -> some View {
         HStack {
             Image(systemName: icon)
@@ -365,225 +537,65 @@ struct MainView: View {
     }
 }
 
-// Replace ResultsPanel struct with a simpler version without dragging
 struct ResultsPanel: View {
-    var viewModel: HalfwayViewModel
+    @ObservedObject var viewModel: HalfwayViewModel
     @Binding var resetLocations: Bool
     @Binding var mapRegion: MKCoordinateRegion
     @Binding var isExpanded: Bool
     @Binding var dragOffset: CGFloat
-    var minHeight: CGFloat
-    var maxHeight: CGFloat
-    var mapType: MKMapType
+    let minHeight: CGFloat
+    let maxHeight: CGFloat
+    let mapType: MKMapType
+    @Binding var searchText: String
     
-    @State private var showAllPlaces = false
-    // Add state for drag gesture
-    @State private var dragState = CGSize.zero
+    // Add state for controlling search overlay visibility
+    @State private var showSearchOverlay = false
+    // Add state to track if keyboard is shown
+    @State private var isKeyboardVisible = false
+    // Add state to track active searching (when text is not empty)
+    private var isActivelySearching: Bool {
+        return !searchText.isEmpty
+    }
+    // Store previous category selection
+    @State private var previousCategory: PlaceCategory? = nil
+    
     @State private var isDragging = false
+    @State private var dragState = CGSize.zero
+    
+    init(viewModel: HalfwayViewModel, 
+         resetLocations: Binding<Bool>,
+         mapRegion: Binding<MKCoordinateRegion>,
+         isExpanded: Binding<Bool>,
+         dragOffset: Binding<CGFloat>,
+         minHeight: CGFloat,
+         maxHeight: CGFloat,
+         mapType: MKMapType,
+         searchText: Binding<String>) {
+        self._viewModel = ObservedObject(wrappedValue: viewModel)
+        _resetLocations = resetLocations
+        _mapRegion = mapRegion
+        _isExpanded = isExpanded
+        _dragOffset = dragOffset
+        self.minHeight = minHeight
+        self.maxHeight = maxHeight
+        self.mapType = mapType
+        _searchText = searchText
+    }
     
     var body: some View {
         VStack(spacing: 0) {
             // Floating card similar to search panel (not stretched to edges)
             VStack(spacing: 0) {
-                // Keep drag indicator for visual consistency but it won't function
-                RoundedRectangle(cornerRadius: 2.5)
-                    .fill(Color.gray.opacity(0.4))
-                    .frame(width: 40, height: 5)
-                    .padding(.top, 12)
-                    .padding(.bottom, 4)
-                
-                // Results header with count and distance
-                HStack {
-                    Text("\(viewModel.places.count) places found")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    if let loc1 = viewModel.location1, let loc2 = viewModel.location2 {
-                        Spacer()
-                        Text(String(format: "%.1f km apart", distance(from: loc1.coordinate, to: loc2.coordinate) / 1000))
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
+                headerView
+                searchBarView // Added inline search bar
+                miniMapView
+                radiusControlView
+                // Only show category filter when not actively searching
+                if !isActivelySearching {
+                    categorySelectionView
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 4)
-                .padding(.bottom, 8)
-                
-                // Mini map area to show overview
-                ZStack {
-                    MapView(region: $mapRegion, 
-                            location1: viewModel.location1, 
-                            location2: viewModel.location2, 
-                            midpoint: viewModel.midpoint,
-                            places: viewModel.places, // Show all places on mini map
-                            searchRadius: viewModel.searchRadius,
-                            selectedPlace: Binding(
-                                get: { viewModel.showingPlaceDetail },
-                                set: { viewModel.showingPlaceDetail = $0 }
-                            ),
-                            isExpanded: false,
-                            resetLocations: $resetLocations,
-                            mapType: mapType)
-                        .frame(height: 160)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-                    
-                    // Overlay text for map expansion with improved visibility
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Text("Tap to expand map")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .foregroundColor(.white)
-                                .padding(.vertical, 8)
-                                .padding(.horizontal, 14)
-                                .background(Color.black.opacity(0.7))
-                                .cornerRadius(10)
-                                .padding(12)
-                        }
-                    }
-                }
-                .frame(height: 160)
-                .contentShape(Rectangle()) // Makes the entire area tappable
-                .padding(.horizontal, 20)
-                .padding(.bottom, 12)
-                .onTapGesture {
-                    withAnimation(.spring(duration: 0.3)) {
-                        isExpanded.toggle()
-                    }
-                }
-                
-                // Radius slider control with improved styling
-                VStack(alignment: .leading) {
-                    HStack {
-                        Text("Search Radius: \(viewModel.searchRadius, specifier: "%.1f") km")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            // Clear results but keep locations
-                            viewModel.places = []
-                        }) {
-                            Text("Reset Search")
-                                .font(.footnote)
-                                .fontWeight(.medium)
-                                .foregroundColor(.indigo)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    Slider(value: Binding(
-                        get: { viewModel.searchRadius },
-                        set: { 
-                            viewModel.searchRadius = $0
-                            // Immediate update when slider changes
-                            viewModel.searchPlacesAroundMidpoint()
-                        }
-                    ), in: 0.5...5.0, step: 0.1)
-                        .padding(.horizontal, 20)
-                        .accentColor(.indigo)
-                }
-                .padding(.bottom, 12)
-                
-                // Category pills with improved styling
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(PlaceCategory.allCases, id: \.self) { category in
-                            Button(action: {
-                                withAnimation {
-                                    if viewModel.selectedCategory == category {
-                                        viewModel.filterByCategory(nil)
-                                    } else {
-                                        viewModel.filterByCategory(category)
-                                    }
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: category.icon)
-                                        .font(.footnote)
-                                    Text(category.rawValue)
-                                        .font(.footnote)
-                                        .fontWeight(.medium)
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(
-                                    Capsule()
-                                        .fill(viewModel.selectedCategory == category ? 
-                                              Color(UIColor(named: category.color) ?? .gray) : 
-                                              Color(UIColor.secondarySystemBackground))
-                                )
-                                .foregroundColor(viewModel.selectedCategory == category ? .white : .primary)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
-                }
-                
-                Divider()
-                    .padding(.horizontal, 20)
-                
-                // Place list section title with toggle
-                HStack {
-                    Text("Nearby Places")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                    
-                    if viewModel.places.count > 3 {
-                        Button(action: {
-                            withAnimation {
-                                showAllPlaces.toggle()
-                            }
-                        }) {
-                            Text(showAllPlaces ? "Show Top 3" : "Show All")
-                                .font(.subheadline)
-                                .foregroundColor(.indigo)
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
-                
-                // Redesigned place cards with better scrolling - fix to ensure cards are visible
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(spacing: 16) {
-                        if viewModel.places.isEmpty {
-                            VStack {
-                                Text("No places found matching your criteria")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                    .padding()
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 24)
-                        } else {
-                            ForEach(viewModel.places.prefix(showAllPlaces ? viewModel.places.count : min(3, viewModel.places.count))) { place in
-                                Button(action: {
-                                    // Immediately show detail view when tapped
-                                    viewModel.showingPlaceDetail = place
-                                }) {
-                                    ImprovedPlaceCard(place: place, location1: viewModel.location1, location2: viewModel.location2, midpoint: viewModel.midpoint)
-                                }
-                                .buttonStyle(ScalingButtonStyle()) // Custom button style for better tap feedback
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                }
-                // Ensure proper height for scroll view content
-                .frame(maxHeight: UIScreen.main.bounds.height * 0.4)
-                .padding(.bottom, 20) // Add bottom padding to ensure content goes all the way to bottom
+                placeListView
             }
-            .padding(.horizontal, 20) // Add padding for floating card effect similar to search panel
             .background(
                 RoundedRectangle(cornerRadius: 24)
                     .fill(Color(UIColor.systemBackground))
@@ -591,35 +603,394 @@ struct ResultsPanel: View {
             )
             .offset(y: dragState.height)
             // Add drag gesture to allow returning to search
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        isDragging = true
-                        // Only allow dragging down
-                        let newHeight = max(0, value.translation.height)
-                        dragState = CGSize(width: 0, height: newHeight)
-                    }
-                    .onEnded { value in
-                        isDragging = false
-                        // If dragged down far enough, return to search screen
-                        if dragState.height > 100 {
-                            withAnimation(.spring()) {
-                                // Clear places but keep locations
-                                viewModel.places = []
-                            }
-                        } else {
-                            // Snap back
-                            withAnimation(.spring()) {
-                                dragState = .zero
-                            }
-                        }
-                    }
-            )
+            .gesture(dragGesture)
         }
         // Fixed height without dragging
         .frame(maxHeight: UIScreen.main.bounds.height * 0.9) // Increase to ensure it extends to bottom
         .edgesIgnoringSafeArea(.bottom)
+        // Add keyboard notifications to adjust UI when keyboard appears
+        .onAppear {
+            NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { _ in
+                isKeyboardVisible = true
+            }
+            NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { _ in
+                isKeyboardVisible = false
+            }
+            // Store initial category selection
+            previousCategory = viewModel.selectedCategory
+        }
     }
+    
+    // MARK: - Component Views
+    
+    private var headerView: some View {
+        HStack {
+            Button(action: {
+                withAnimation {
+                    // Clear places and return to search
+                    viewModel.filteredPlaces = []
+                    viewModel.places = []
+                }
+            }) {
+                Image(systemName: "chevron.left")
+                    .foregroundColor(.primary)
+                    .padding(10)
+                    .background(Color(UIColor.tertiarySystemBackground))
+                    .clipShape(Circle())
+            }
+            
+            Spacer()
+            
+            VStack(spacing: 4) {
+                // Results header with count
+                Text("\(viewModel.filteredPlaces.count) places found")
+                    .font(.headline)
+                    .fontWeight(.bold)
+                
+                // Show the number of locations with more context
+                if viewModel.locations.isEmpty {
+                    Text("No locations selected")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else if viewModel.locations.count == 1 {
+                    Text("1 location selected")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("\(viewModel.locations.count) locations selected")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .padding(.bottom, 10)
+    }
+    
+    // New inline search bar that's always visible at the top
+    private var searchBarView: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.gray)
+            
+            TextField("Search places...", text: $searchText)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+                .onSubmit {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+                .onChange(of: searchText) { newValue in
+                    viewModel.searchText = newValue
+                    viewModel.filterPlacesWithCurrentSettings()
+                    
+                    // If starting to search, remember the filter
+                    if !newValue.isEmpty && previousCategory == nil {
+                        previousCategory = viewModel.selectedCategory
+                    }
+                    
+                    // If clearing search, restore previous filter
+                    if newValue.isEmpty && viewModel.selectedCategory == nil && previousCategory != nil {
+                        viewModel.selectedCategory = previousCategory
+                        viewModel.filterPlacesWithCurrentSettings()
+                    }
+                }
+            
+            if !searchText.isEmpty {
+                Button(action: {
+                    searchText = ""
+                    viewModel.searchText = ""
+                    
+                    // Restore previous filter when clearing search
+                    if previousCategory != nil {
+                        viewModel.selectedCategory = previousCategory
+                    }
+                    viewModel.filterPlacesWithCurrentSettings()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(UIColor.secondarySystemBackground))
+        )
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+    }
+    
+    private var miniMapView: some View {
+        // Mini map area to show overview - update to use midpoint for region center
+        ZStack {
+            // Create a local MapView with a region centered on the midpoint
+            if let midpoint = viewModel.midpoint {
+                MapView(region: $mapRegion, 
+                        locations: viewModel.locations,
+                        midpoint: midpoint,
+                        places: viewModel.filteredPlaces,
+                        searchRadius: viewModel.searchRadius,
+                        selectedPlace: Binding(
+                            get: { viewModel.showingPlaceDetail },
+                            set: { viewModel.showingPlaceDetail = $0 }
+                        ),
+                        isExpanded: false,
+                        resetLocations: $resetLocations,
+                        mapType: mapType)
+                    .frame(height: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+                
+                // Overlay text for map expansion with improved visibility
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("Tap to expand map")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(.white)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 14)
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(10)
+                            .padding(12)
+                    }
+                }
+            } else {
+                Text("Map not available")
+                    .frame(height: 160)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.gray.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+        }
+        .frame(height: 160)
+        .contentShape(Rectangle()) // Makes the entire area tappable
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+        .onTapGesture {
+            withAnimation(.spring(duration: 0.3)) {
+                isExpanded.toggle()
+            }
+        }
+    }
+    
+    private var radiusControlView: some View {
+        // Radius slider control with improved styling
+        VStack(alignment: .leading) {
+            HStack {
+                Text("Search Radius: \(viewModel.searchRadius, specifier: "%.1f") km")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                Button(action: {
+                    // Clear results but keep locations
+                    viewModel.filteredPlaces = []
+                    viewModel.places = []
+                    searchText = ""
+                    viewModel.searchText = ""
+                    viewModel.searchPlacesAroundMidpoint()
+                }) {
+                    Text("Reset Search")
+                        .font(.footnote)
+                        .fontWeight(.medium)
+                        .foregroundColor(.indigo)
+                }
+            }
+            .padding(.horizontal, 20)
+            
+            // Dynamic slider that adapts to max distance
+            Slider(value: Binding(
+                get: { viewModel.searchRadius },
+                set: { viewModel.updateSearchRadius($0) }
+            ), in: 0.5...viewModel.maxSearchRadius, step: 0.1)
+                .padding(.horizontal, 20)
+                .accentColor(.indigo)
+                .animation(nil, value: viewModel.searchRadius) // Removes animation on slider itself
+                .onChange(of: viewModel.maxSearchRadius) { newMax in
+                    // Make sure search radius is within bounds when max changes
+                    if viewModel.searchRadius > newMax {
+                        viewModel.searchRadius = newMax
+                    }
+                }
+        }
+        .padding(.bottom, 12)
+    }
+    
+    private var categorySelectionView: some View {
+        VStack {
+            Menu {
+                Button("All Categories") {
+                    viewModel.selectedCategory = nil
+                    previousCategory = nil // Update previous category
+                    viewModel.filterPlacesWithCurrentSettings()
+                }
+                
+                ForEach(PlaceCategory.allCases, id: \.self) { category in
+                    Button(action: {
+                        viewModel.selectedCategory = category
+                        previousCategory = category // Update previous category
+                        viewModel.filterPlacesWithCurrentSettings()
+                    }) {
+                        HStack {
+                            Text(category.rawValue)
+                            Spacer()
+                            if viewModel.selectedCategory == category {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(viewModel.selectedCategory?.rawValue ?? "Filter by Category")
+                        .font(.subheadline)
+                    
+                    Image(systemName: "chevron.down")
+                        .font(.caption)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color(UIColor.secondarySystemBackground))
+                .cornerRadius(10)
+            }
+            .animation(.easeInOut, value: viewModel.selectedCategory)
+            .padding(.horizontal, 20)
+            
+            Divider()
+                .padding(.horizontal, 20)
+        }
+    }
+    
+    private var placeListView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                // Conditionally show different header based on search
+                if isActivelySearching {
+                    Text("Search Results")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                } else {
+                    Text("Results")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                }
+                
+                Spacer()
+                
+                if !viewModel.filteredPlaces.isEmpty {
+                    Text("\(viewModel.filteredPlaces.count) \(viewModel.filteredPlaces.count == 1 ? "result" : "results")")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+            
+            if viewModel.filteredPlaces.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 24))
+                        .foregroundColor(.secondary)
+                    
+                    if isActivelySearching {
+                        Text("No matches found for \"\(searchText)\"")
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        
+                        Text("Try a different search term or clear filters")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        
+                        // Add a button to clear search
+                        Button(action: {
+                            searchText = ""
+                            viewModel.searchText = ""
+                            viewModel.filterPlacesWithCurrentSettings()
+                        }) {
+                            Text("Clear Search")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.indigo)
+                                )
+                        }
+                        .padding(.top, 8)
+                    } else {
+                        Text("No matching places found")
+                            .foregroundColor(.secondary)
+                        Text("Try adjusting your search or filters")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 40)
+                .padding(.horizontal, 20)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(viewModel.filteredPlaces, id: \.id) { place in
+                            PlaceRow(place: place, midpoint: viewModel.midpoint)
+                                .onTapGesture {
+                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                    viewModel.showingPlaceDetail = place
+                                }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                }
+            }
+        }
+        // Add extra padding at bottom when keyboard is visible
+        .padding(.bottom, isKeyboardVisible ? 260 : 0)
+        .animation(.easeOut, value: isKeyboardVisible)
+    }
+    
+    // MARK: - Drag Gesture
+    
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                // Dismiss keyboard when dragging
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                
+                isDragging = true
+                // Only allow dragging down
+                let newHeight = max(0, value.translation.height)
+                dragState = CGSize(width: 0, height: newHeight)
+            }
+            .onEnded { value in
+                isDragging = false
+                // If dragged down far enough, return to search screen
+                if dragState.height > 100 {
+                    withAnimation(.spring()) {
+                        // Clear places but keep locations
+                        viewModel.filteredPlaces = []
+                        viewModel.places = []
+                        // Don't modify search text when dragging
+                    }
+                } else {
+                    // Snap back
+                    withAnimation(.spring()) {
+                        dragState = .zero
+                    }
+                }
+            }
+    }
+    
+    // MARK: - Helper Functions
     
     private func distance(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> CLLocationDistance {
         let from = CLLocation(latitude: from.latitude, longitude: from.longitude)
@@ -632,8 +1003,19 @@ struct ResultsPanel: View {
 struct ScalingButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
-            .animation(.easeInOut(duration: 0.2), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+            .opacity(configuration.isPressed ? 0.9 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+// Add a new more responsive button style that gives immediate feedback
+struct InstantFeedbackButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
+            .brightness(configuration.isPressed ? -0.05 : 0)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 
@@ -809,4 +1191,8 @@ struct RoundedCorner: Shape {
         let path = UIBezierPath(roundedRect: rect, byRoundingCorners: corners, cornerRadii: CGSize(width: radius, height: radius))
         return Path(path.cgPath)
     }
+}
+
+class CancellableStore: ObservableObject {
+    var set = Set<AnyCancellable>()
 } 

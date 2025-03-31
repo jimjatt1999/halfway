@@ -4,56 +4,85 @@ import MapKit
 struct PlaceRow: View {
     let place: Place
     let midpoint: CLLocationCoordinate2D?
+    @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                // Category icon
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                // Category icon with color
                 ZStack {
                     Circle()
                         .fill(Color(UIColor(hex: place.category.color)))
-                        .frame(width: 50, height: 50)
+                        .frame(width: 42, height: 42)
                     
                     Image(systemName: place.category.icon)
-                        .font(.title3)
                         .foregroundColor(.white)
+                        .font(.system(size: 18))
                 }
                 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(place.name)
-                        .font(.headline)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
                     
                     if midpoint != nil {
-                        let distance = place.distanceFromMidpoint
-                        let formattedDistance = formatDistance(distance)
-                        Text("\(formattedDistance) from midpoint")
+                        Text(formatDistance(place.distanceFromMidpoint))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    
-                    Spacer()
                 }
                 
                 Spacer()
                 
+                // Travel time information
+                travelTimeView
+                
                 Image(systemName: "chevron.right")
-                    .foregroundColor(.gray)
-                    .padding(.trailing, 4)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            .padding()
-            .background(Color.white)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(UIColor.secondarySystemBackground).opacity(0.5))
+            )
+            .contentShape(Rectangle())
+        }
+        .background(Color(UIColor.systemBackground))
+    }
+    
+    // Travel time tags
+    private var travelTimeView: some View {
+        HStack(spacing: 8) {
+            // Show driving time
+            if let fastestDriving = place.getFastestTravelTime().driving {
+                Label("\(fastestDriving) min", systemImage: "car.fill")
+                    .font(.caption)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(6)
+            }
             
-            Divider()
-                .padding(.leading, 74)
+            // Show walking time
+            if let fastestWalking = place.getFastestTravelTime().walking {
+                Label("\(fastestWalking) min", systemImage: "figure.walk")
+                    .font(.caption)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(6)
+            }
         }
     }
     
     private func formatDistance(_ distance: CLLocationDistance) -> String {
         if distance < 1000 {
-            return "\(Int(distance))m"
+            return "\(Int(distance))m from midpoint"
         } else {
-            let distanceInKm = distance / 1000
-            return String(format: "%.1f km", distanceInKm)
+            return String(format: "%.1f km from midpoint", distance / 1000)
         }
     }
 } 

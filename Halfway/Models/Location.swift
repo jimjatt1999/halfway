@@ -34,4 +34,11 @@ struct Location: Identifiable, Equatable, Hashable {
     static func currentLocation(with coordinate: CLLocationCoordinate2D) -> Location {
         return Location(name: "Current Location", coordinate: coordinate, isUserLocation: true)
     }
+}
+
+// Add extension to make CLLocationCoordinate2D conform to Equatable
+extension CLLocationCoordinate2D: @retroactive Equatable {
+    public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
+        return lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
+    }
 } 

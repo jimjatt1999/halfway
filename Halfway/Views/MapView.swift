@@ -5,6 +5,7 @@ struct MapView: UIViewRepresentable {
     @Binding var region: MKCoordinateRegion
     var location1: Location?
     var location2: Location?
+    var locations: [Location]? // Added to support multiple locations
     var midpoint: CLLocationCoordinate2D?
     var places: [Place]
     var searchRadius: Double
@@ -16,11 +17,66 @@ struct MapView: UIViewRepresentable {
     // Added to prevent automatic region changes
     @State private var userInteracted = false
     
+    // Flag to enable/disable map panning and zooming
+    var allowsInteraction: Bool = true
+    
+    // Default initializer for backward compatibility
+    init(region: Binding<MKCoordinateRegion>, 
+         location1: Location?, 
+         location2: Location?,
+         midpoint: CLLocationCoordinate2D?,
+         places: [Place],
+         searchRadius: Double,
+         selectedPlace: Binding<Place?>,
+         isExpanded: Bool = false,
+         resetLocations: Binding<Bool>,
+         mapType: MKMapType = .standard) {
+        self._region = region
+        self.location1 = location1
+        self.location2 = location2
+        self.locations = [location1, location2].compactMap { $0 }
+        self.midpoint = midpoint
+        self.places = places
+        self.searchRadius = searchRadius
+        self._selectedPlace = selectedPlace
+        self.isExpanded = isExpanded
+        self._resetLocations = resetLocations
+        self.mapType = mapType
+    }
+    
+    // New initializer for direct locations array
+    init(region: Binding<MKCoordinateRegion>, 
+         locations: [Location],
+         midpoint: CLLocationCoordinate2D?,
+         places: [Place],
+         searchRadius: Double,
+         selectedPlace: Binding<Place?>,
+         isExpanded: Bool = false,
+         resetLocations: Binding<Bool>,
+         mapType: MKMapType = .standard) {
+        self._region = region
+        self.location1 = locations.count > 0 ? locations[0] : nil
+        self.location2 = locations.count > 1 ? locations[1] : nil
+        self.locations = locations
+        self.midpoint = midpoint
+        self.places = places
+        self.searchRadius = searchRadius
+        self._selectedPlace = selectedPlace
+        self.isExpanded = isExpanded
+        self._resetLocations = resetLocations
+        self.mapType = mapType
+    }
+    
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.showsUserLocation = true
         mapView.mapType = mapType
+        
+        // Ensure map interaction is enabled
+        mapView.isZoomEnabled = true
+        mapView.isScrollEnabled = true
+        mapView.isRotateEnabled = true
         
         // Improve map appearance
         mapView.pointOfInterestFilter = .excludingAll // Hide default POIs for cleaner look
@@ -79,8 +135,15 @@ struct MapView: UIViewRepresentable {
                 // Calculate region to show all points when in expanded mode
                 var allPoints: [CLLocationCoordinate2D] = []
                 if let midpoint = midpoint { allPoints.append(midpoint) }
-                if let loc1 = location1?.coordinate { allPoints.append(loc1) }
-                if let loc2 = location2?.coordinate { allPoints.append(loc2) }
+                
+                // Add all locations' coordinates
+                if let locs = locations {
+                    allPoints.append(contentsOf: locs.map { $0.coordinate })
+                } else {
+                    // For backward compatibility
+                    if let loc1 = location1?.coordinate { allPoints.append(loc1) }
+                    if let loc2 = location2?.coordinate { allPoints.append(loc2) }
+                }
                 
                 if !allPoints.isEmpty {
                     let expandedRegion = regionThatFits(coordinates: allPoints)
@@ -98,6 +161,7 @@ struct MapView: UIViewRepresentable {
         // Only update annotations if needed
         let shouldUpdateAnnotations = context.coordinator.shouldUpdateAnnotations(
             mapView: mapView,
+            locations: locations,
             location1: location1,
             location2: location2,
             midpoint: midpoint,
@@ -109,14 +173,30 @@ struct MapView: UIViewRepresentable {
             mapView.removeAnnotations(mapView.annotations.filter { !($0 is MKUserLocation) })
             mapView.removeOverlays(mapView.overlays)
             
-            // Add annotations for location1 and location2
-            if let location1 = location1 {
-                let annotation = LocationAnnotation(coordinate: location1.coordinate, title: "Location 1", type: .location1)
-                mapView.addAnnotation(annotation)
+            // Determine which locations to display
+            let locationsToShow: [Location]
+            if let locs = locations, !locs.isEmpty {
+                locationsToShow = locs
+            } else {
+                // For backward compatibility
+                locationsToShow = [location1, location2].compactMap { $0 }
             }
             
-            if let location2 = location2 {
-                let annotation = LocationAnnotation(coordinate: location2.coordinate, title: "Location 2", type: .location2)
+            // Add annotations for all locations
+            for (index, location) in locationsToShow.enumerated() {
+                // Create different types based on index
+                let type: LocationAnnotation.LocationType
+                switch index {
+                case 0: type = .location1
+                case 1: type = .location2
+                default: type = .additionalLocation(index: index)
+                }
+                
+                let annotation = LocationAnnotation(
+                    coordinate: location.coordinate,
+                    title: "Location \(index + 1)",
+                    type: type
+                )
                 mapView.addAnnotation(annotation)
             }
             
@@ -129,16 +209,11 @@ struct MapView: UIViewRepresentable {
                 let circle = MKCircle(center: midpoint, radius: searchRadius * 1000) // Convert km to meters
                 mapView.addOverlay(circle)
                 
-                // Add line overlays to connect the points
-                if let loc1 = location1?.coordinate, let loc2 = location2?.coordinate {
-                    let line1Points = [loc1, midpoint]
-                    let line2Points = [loc2, midpoint]
-                    
-                    let polyline1 = MKPolyline(coordinates: line1Points, count: line1Points.count)
-                    let polyline2 = MKPolyline(coordinates: line2Points, count: line2Points.count)
-                    
-                    mapView.addOverlay(polyline1)
-                    mapView.addOverlay(polyline2)
+                // Add line overlays to connect all locations to the midpoint
+                for location in locationsToShow {
+                    let linePoints = [location.coordinate, midpoint]
+                    let polyline = MKPolyline(coordinates: linePoints, count: linePoints.count)
+                    mapView.addOverlay(polyline)
                 }
             }
             
@@ -150,6 +225,7 @@ struct MapView: UIViewRepresentable {
             
             // Save current state
             context.coordinator.saveCurrentState(
+                locations: locationsToShow,
                 location1: location1,
                 location2: location2,
                 midpoint: midpoint,
@@ -212,6 +288,7 @@ struct MapView: UIViewRepresentable {
         var lastExpandedState = false
         
         // Properties to track last state
+        private var lastLocations: [Location] = []
         private var lastLocation1: Location?
         private var lastLocation2: Location?
         private var lastMidpoint: CLLocationCoordinate2D?
@@ -339,6 +416,14 @@ struct MapView: UIViewRepresentable {
                     annotationView?.markerTintColor = UIColor.systemRed
                     annotationView?.glyphImage = UIImage(systemName: "star.fill")
                     annotationView?.selectedGlyphImage = UIImage(systemName: "star.fill")
+                case .additionalLocation(let index):
+                    // Use different colors for additional locations
+                    let colors: [UIColor] = [.systemPurple, .systemOrange, .systemPink]
+                    let colorIndex = (index - 2) % colors.count  // -2 because indices 0,1 are for location1/2
+                    
+                    annotationView?.markerTintColor = colors[colorIndex]
+                    annotationView?.glyphImage = UIImage(systemName: "\(index + 1).circle.fill")
+                    annotationView?.selectedGlyphImage = UIImage(systemName: "\(index + 1).circle.fill")
                 }
                 
                 return annotationView
@@ -359,24 +444,55 @@ struct MapView: UIViewRepresentable {
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
                 
-                // Check if this is a line to location1 or location2 and style accordingly
-                if let midpoint = parent.midpoint, let location1 = parent.location1, let location2 = parent.location2 {
-                    _ = midpoint
-                    let point = polyline.points()[0]
-                    let coordinate = CLLocationCoordinate2D(latitude: point.coordinate.latitude, longitude: point.coordinate.longitude)
+                // Determine which location this line connects to
+                if let midpoint = parent.midpoint {
+                    let startPoint = polyline.points()[0]
+                    let startCoord = CLLocationCoordinate2D(
+                        latitude: startPoint.coordinate.latitude,
+                        longitude: startPoint.coordinate.longitude
+                    )
                     
-                    let distanceToLoc1 = distanceBetween(coordinate, location1.coordinate)
-                    let distanceToLoc2 = distanceBetween(coordinate, location2.coordinate)
+                    // Get all location coordinates for comparison
+                    var locationCoords: [(index: Int, coord: CLLocationCoordinate2D)] = []
                     
-                    if distanceToLoc1 < distanceToLoc2 {
-                        // This is the line to location1
-                        renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.7)
+                    if let locations = parent.locations {
+                        for (index, location) in locations.enumerated() {
+                            locationCoords.append((index, location.coordinate))
+                        }
                     } else {
-                        // This is the line to location2
-                        renderer.strokeColor = UIColor.systemGreen.withAlphaComponent(0.7)
+                        if let loc1 = parent.location1?.coordinate {
+                            locationCoords.append((0, loc1))
+                        }
+                        if let loc2 = parent.location2?.coordinate {
+                            locationCoords.append((1, loc2))
+                        }
                     }
+                    
+                    // Find which location is closest to the start point
+                    var closestIndex = 0
+                    var minDistance = Double.greatestFiniteMagnitude
+                    
+                    for (index, coord) in locationCoords {
+                        let distance = distanceBetween(startCoord, coord)
+                        if distance < minDistance {
+                            minDistance = distance
+                            closestIndex = index
+                        }
+                    }
+                    
+                    // Set color based on location index
+                    let colors: [UIColor] = [
+                        .systemBlue,    // Location 1
+                        .systemGreen,   // Location 2
+                        .systemPurple,  // Location 3
+                        .systemOrange,  // Location 4
+                        .systemPink     // Location 5
+                    ]
+                    
+                    let colorIndex = min(closestIndex, colors.count - 1)
+                    renderer.strokeColor = colors[colorIndex].withAlphaComponent(0.7)
                 } else {
-                    // Default style if we can't determine
+                    // Default color if we can't determine
                     renderer.strokeColor = UIColor.systemGray.withAlphaComponent(0.7)
                 }
                 
@@ -438,12 +554,29 @@ struct MapView: UIViewRepresentable {
         
         func shouldUpdateAnnotations(
             mapView: MKMapView,
+            locations: [Location]?,
             location1: Location?,
             location2: Location?,
             midpoint: CLLocationCoordinate2D?,
             places: [Place]
         ) -> Bool {
-            // Check if locations or midpoint have changed
+            // Check if locations array has changed (added or removed locations)
+            if let locs = locations {
+                if locs.count != lastLocations.count {
+                    return true
+                }
+                
+                // Check if any locations have changed
+                for (index, location) in locs.enumerated() {
+                    if index >= lastLocations.count ||
+                       location.coordinate.latitude != lastLocations[index].coordinate.latitude ||
+                       location.coordinate.longitude != lastLocations[index].coordinate.longitude {
+                        return true
+                    }
+                }
+            }
+            
+            // Check if legacy locations or midpoint have changed
             if (lastLocation1?.coordinate.latitude != location1?.coordinate.latitude ||
                 lastLocation1?.coordinate.longitude != location1?.coordinate.longitude ||
                 lastLocation2?.coordinate.latitude != location2?.coordinate.latitude ||
@@ -460,12 +593,14 @@ struct MapView: UIViewRepresentable {
         }
         
         func saveCurrentState(
+            locations: [Location],
             location1: Location?,
             location2: Location?,
             midpoint: CLLocationCoordinate2D?,
             places: [Place],
             searchRadius: Double
         ) {
+            lastLocations = locations
             lastLocation1 = location1
             lastLocation2 = location2
             lastMidpoint = midpoint
@@ -516,5 +651,6 @@ class LocationAnnotation: NSObject, MKAnnotation {
         case location1
         case location2
         case midpoint
+        case additionalLocation(index: Int)
     }
 } 
