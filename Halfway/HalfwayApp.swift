@@ -5,12 +5,23 @@ import MapKit
 struct HalfwayApp: App {
     @StateObject private var locationManager = LocationManager()
     @State private var showLaunchScreen = true
+    @AppStorage("isOnboardingCompleted") private var isOnboardingCompleted = false
     
     var body: some Scene {
         WindowGroup {
             ZStack {
-                MainView()
-                    .environmentObject(locationManager)
+                Group {
+                    if isOnboardingCompleted {
+                        MainView()
+                            .environmentObject(locationManager)
+                            .transition(.opacity)
+                    } else {
+                        OnboardingView(isOnboardingCompleted: $isOnboardingCompleted)
+                            .transition(.opacity)
+                    }
+                }
+                .zIndex(0)
+                .opacity(showLaunchScreen ? 0 : 1)
                 
                 if showLaunchScreen {
                     LaunchScreenView()
@@ -21,7 +32,7 @@ struct HalfwayApp: App {
             .onAppear {
                 // Dismiss the launch screen after animation completes
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                    withAnimation(.easeOut(duration: 0.3)) {
+                    withAnimation(.easeOut(duration: 0.8)) {
                         showLaunchScreen = false
                     }
                 }

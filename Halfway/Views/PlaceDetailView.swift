@@ -7,6 +7,7 @@ struct PlaceDetailView: View {
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.colorScheme) var colorScheme
     @State private var selectedTab = 0
+    @State private var showShareToast = false
     
     // For backwards compatibility
     init(place: Place, location1: Location?, location2: Location?) {
@@ -19,12 +20,6 @@ struct PlaceDetailView: View {
         self.place = place
         self.locations = locations
     }
-    
-    // Mock data for display purposes
-    @State private var rating: Double = Double.random(in: 3.5...4.9)
-    @State private var reviewCount: Int = Int.random(in: 15...120)
-    @State private var isOpen: Bool = Bool.random()
-    @State private var hours: String = "\(Int.random(in: 7...11)):00 - \(Int.random(in: 20...23)):00"
     
     var body: some View {
         ScrollView {
@@ -40,26 +35,6 @@ struct PlaceDetailView: View {
                         Spacer()
                         
                         HStack(spacing: 12) {
-                            Button(action: {
-                                addToFavorites()
-                            }) {
-                                Image(systemName: "plus")
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                                    .frame(width: 36, height: 36)
-                                    .background(Circle().fill(Color(UIColor.tertiarySystemBackground)))
-                            }
-                            
-                            Button(action: {
-                                sharePlace()
-                            }) {
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.headline)
-                                    .foregroundColor(.primary)
-                                    .frame(width: 36, height: 36)
-                                    .background(Circle().fill(Color(UIColor.tertiarySystemBackground)))
-                            }
-                            
                             Button(action: {
                                 presentationMode.wrappedValue.dismiss()
                             }) {
@@ -125,17 +100,23 @@ struct PlaceDetailView: View {
                             }
                         }
                         
-                        // Call button
-                        ActionButton(title: "Call", icon: "phone", action: makeCall)
+                        // Only show Call button if phone number is available
+                        if place.mapItem.phoneNumber != nil {
+                            ActionButton(title: "Call", icon: "phone", action: makeCall)
+                        }
                         
-                        // Website button
-                        ActionButton(title: "Website", icon: "safari", action: openWebsite)
+                        // Only show Website button if URL is available
+                        if place.mapItem.url != nil {
+                            ActionButton(title: "Website", icon: "safari", action: openWebsite)
+                        }
                         
-                        // Menu button
-                        ActionButton(title: "Menu", icon: "doc.text", action: openMenu)
+                        // Only show Menu button for restaurants, cafes and bars
+                        if place.category == .restaurant || place.category == .cafe || place.category == .bar {
+                            ActionButton(title: "Menu", icon: "doc.text", action: openMenu)
+                        }
                         
-                        // More button
-                        ActionButton(title: "More", icon: "ellipsis", action: showMoreOptions)
+                        // Share button
+                        ActionButton(title: "Share", icon: "square.and.arrow.up", action: shareLocation)
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 8)
@@ -144,85 +125,28 @@ struct PlaceDetailView: View {
                 Divider()
                     .padding(.top, 8)
                 
-                // Information tabs (similar to Apple Maps)
+                // Information tab - only show distance since that's reliable data
                 VStack(spacing: 0) {
-                    // Tab buttons
-                    HStack(spacing: 0) {
-                        TabButton(title: "HOURS", isSelected: selectedTab == 0) {
-                            selectedTab = 0
-                        }
+                    // Distance tab
+                    HStack {
+                        Image(systemName: "location.fill")
+                            .foregroundColor(.gray)
                         
-                        TabButton(title: "RATINGS", isSelected: selectedTab == 1) {
-                            selectedTab = 1
-                        }
+                        Text(formatDistance(place.distanceFromMidpoint))
+                            .fontWeight(.medium)
                         
-                        TabButton(title: "DISTANCE", isSelected: selectedTab == 2) {
-                            selectedTab = 2
+                        Spacer()
+                        
+                        Button(action: {
+                            openInMaps()
+                        }) {
+                            Text("Directions")
+                                .foregroundColor(.blue)
+                                .fontWeight(.medium)
                         }
                     }
-                    
-                    // Tab content based on selection
-                    VStack(alignment: .leading, spacing: 8) {
-                        if selectedTab == 0 {
-                            // Hours tab
-                            HStack {
-                                Text(isOpen ? "Open" : "Closed")
-                                    .foregroundColor(isOpen ? .green : .red)
-                                    .fontWeight(.medium)
-                                
-                                Spacer()
-                                
-                                Text(hours)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                        } else if selectedTab == 1 {
-                            // Ratings tab
-                            HStack(spacing: 8) {
-                                RatingStars(rating: rating)
-                                
-                                Text(String(format: "%.1f", rating))
-                                    .fontWeight(.medium)
-                                
-                                Text("(\(reviewCount))")
-                                    .foregroundColor(.secondary)
-                                
-                                Spacer()
-                                
-                                Button(action: {
-                                    // Open ratings site
-                                }) {
-                                    Text("Rate")
-                                        .foregroundColor(.blue)
-                                        .fontWeight(.medium)
-                                }
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                        } else {
-                            // Distance tab
-                            HStack {
-                                Image(systemName: "location.fill")
-                                    .foregroundColor(.gray)
-                                
-                                Text(formatDistance(place.distanceFromMidpoint))
-                                    .fontWeight(.medium)
-                                
-                                Spacer()
-                                
-                                Button(action: {
-                                    openInMaps()
-                                }) {
-                                    Text("Directions")
-                                        .foregroundColor(.blue)
-                                        .fontWeight(.medium)
-                                }
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                        }
-                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
                 }
                 
                 Divider()
@@ -231,87 +155,6 @@ struct PlaceDetailView: View {
                 PlaceMapView(place: place, locations: locations)
                     .frame(height: 220)
                     .padding(.top, 8)
-                
-                // Image mockup (would be actual images in real implementation)
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Photos")
-                        .font(.headline)
-                        .padding(.horizontal)
-                        .padding(.top, 16)
-                    
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(1...3, id: \.self) { _ in
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.gray.opacity(0.3))
-                                    .frame(width: 160, height: 120)
-                                    .overlay(
-                                        Image(systemName: "photo")
-                                            .font(.largeTitle)
-                                            .foregroundColor(.gray)
-                                    )
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-                }
-                
-                // Reviews section
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Ratings & Reviews")
-                            .font(.headline)
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            // Open full reviews
-                        }) {
-                            Text("See All")
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 16)
-                    
-                    // Rating summary
-                    HStack(spacing: 16) {
-                        VStack(spacing: 4) {
-                            Text(String(format: "%.1f", rating))
-                                .font(.system(size: 36, weight: .bold))
-                            
-                            RatingStars(rating: rating)
-                                .frame(height: 20)
-                            
-                            Text("\(reviewCount) ratings")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(width: 100)
-                        
-                        // Mock review
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                RatingStars(rating: 4.0)
-                                    .frame(height: 16)
-                                
-                                Spacer()
-                                
-                                Text("2 months ago")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Text("Visited and really enjoyed the atmosphere. The food was delicious and service was great.")
-                                .font(.subheadline)
-                                .lineLimit(2)
-                        }
-                    }
-                    .padding()
-                    .background(Color(UIColor.secondarySystemBackground).opacity(0.5))
-                    .cornerRadius(12)
-                    .padding(.horizontal)
-                }
                 
                 // Travel information section
                 VStack(alignment: .leading, spacing: 16) {
@@ -391,7 +234,7 @@ struct PlaceDetailView: View {
                     }
                 }
                 
-                // Details section
+                // Details section - only show data we can reliably get
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Details")
                         .font(.headline)
@@ -399,33 +242,29 @@ struct PlaceDetailView: View {
                         .padding(.top, 16)
                     
                     VStack(spacing: 0) {
-                        // Hours row
-                        DetailRow(icon: "clock", title: "Hours", value: hours) {
-                            // View hours action
+                        // Website row - only if available
+                        if place.mapItem.url != nil {
+                            DetailRow(icon: "safari", title: "Website", value: "Visit Website") {
+                                openWebsite()
+                            }
+                            
+                            Divider()
+                                .padding(.leading, 56)
                         }
                         
-                        Divider()
-                            .padding(.leading, 56)
-                        
-                        // Website row
-                        DetailRow(icon: "safari", title: "Website", value: "Visit Website") {
-                            openWebsite()
+                        // Phone row - only if available
+                        if let phoneNumber = place.mapItem.phoneNumber {
+                            DetailRow(icon: "phone", title: "Phone", value: phoneNumber) {
+                                makeCall()
+                            }
+                            
+                            Divider()
+                                .padding(.leading, 56)
                         }
                         
-                        Divider()
-                            .padding(.leading, 56)
-                        
-                        // Phone row
-                        DetailRow(icon: "phone", title: "Phone", value: "+1 (555) 123-4567") {
-                            makeCall()
-                        }
-                        
-                        Divider()
-                            .padding(.leading, 56)
-                        
-                        // Address row
-                        DetailRow(icon: "mappin", title: "Address", value: place.mapItem.placemark.thoroughfare ?? "View Address") {
-                            // View on map
+                        // Address row - combine all available address components
+                        DetailRow(icon: "mappin", title: "Address", value: formatAddress()) {
+                            shareLocation()
                         }
                     }
                     .background(Color(UIColor.secondarySystemBackground).opacity(0.5))
@@ -450,6 +289,28 @@ struct PlaceDetailView: View {
                                 .fill(Color.blue)
                         )
                         .foregroundColor(.white)
+                    }
+                    
+                    // Share location button
+                    Button(action: {
+                        shareLocation()
+                    }) {
+                        HStack {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share Location")
+                                .fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(UIColor.tertiarySystemBackground))
+                        )
+                        .foregroundColor(.primary)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                        )
                     }
                     
                     // Display different transit options
@@ -480,6 +341,24 @@ struct PlaceDetailView: View {
         .background(colorScheme == .dark ? Color(UIColor.systemBackground) : Color(UIColor.systemGroupedBackground))
         .edgesIgnoringSafeArea(.bottom)
         .navigationBarHidden(true)
+        .overlay(
+            // Toast message when location is copied
+            VStack {
+                Spacer()
+                
+                if showShareToast {
+                    Text("Location copied to clipboard")
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(8)
+                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                        .transition(.move(edge: .bottom))
+                        .padding(.bottom, 30)
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: showShareToast)
+        )
     }
     
     private func formatDistance(_ distance: CLLocationDistance) -> String {
@@ -491,6 +370,38 @@ struct PlaceDetailView: View {
         }
     }
     
+    private func formatAddress() -> String {
+        let placemark = place.mapItem.placemark
+        var components: [String] = []
+        
+        if let thoroughfare = placemark.thoroughfare {
+            components.append(thoroughfare)
+        }
+        
+        if let subThoroughfare = placemark.subThoroughfare {
+            // Insert at beginning if it's a number
+            if Int(subThoroughfare) != nil && !components.isEmpty {
+                components[0] = "\(subThoroughfare) \(components[0])"
+            } else {
+                components.append(subThoroughfare)
+            }
+        }
+        
+        if let locality = placemark.locality {
+            components.append(locality)
+        }
+        
+        if let administrativeArea = placemark.administrativeArea {
+            components.append(administrativeArea)
+        }
+        
+        if let postalCode = placemark.postalCode {
+            components.append(postalCode)
+        }
+        
+        return components.isEmpty ? "View Address" : components.joined(separator: ", ")
+    }
+    
     private func openInMaps(mode: String = "MKLaunchOptionsDirectionsModeDriving") {
         let options = [
             MKLaunchOptionsDirectionsModeKey: mode
@@ -499,50 +410,77 @@ struct PlaceDetailView: View {
         place.mapItem.openInMaps(launchOptions: options)
     }
     
-    private func sharePlace() {
-        let message = "Hey! Let's meet at \(place.name). I found this spot on Halfway - it's right in the middle between us!"
+    private func shareLocation() {
+        // Create message with place details
+        var shareText = "I found this location on Halfway! Let's meet at: "
         
-        // Create activity items including location coordinates for sharing
-        let items: [Any] = [message]
+        // Add place name and address if available
+        shareText += "\n\n\(place.name)"
         
-        // Create and present the activity view controller
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootViewController = windowScene.windows.first?.rootViewController else {
-            return
+        let address = formatAddress()
+        if address != "View Address" {
+            shareText += "\n\(address)"
         }
         
-        let activityViewController = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        rootViewController.present(activityViewController, animated: true, completion: nil)
+        // Add travel times
+        shareText += "\n\nTravel times:"
+        for (index, location) in locations.enumerated() {
+            let travelTime = place.getTravelTime(forLocationIndex: index)
+            var travelInfo = ""
+            
+            if let drivingTime = travelTime.driving {
+                travelInfo += "\(drivingTime) min by car"
+            }
+            
+            if let walkingTime = travelTime.walking {
+                if !travelInfo.isEmpty {
+                    travelInfo += ", "
+                }
+                travelInfo += "\(walkingTime) min walking"
+            }
+            
+            if !travelInfo.isEmpty {
+                shareText += "\n- From \(location.name): \(travelInfo)"
+            }
+        }
+        
+        // Copy to clipboard
+        UIPasteboard.general.string = shareText
+        
+        // Show toast
+        withAnimation {
+            showShareToast = true
+        }
+        
+        // Hide toast after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation {
+                showShareToast = false
+            }
+        }
     }
     
     private func makeCall() {
-        guard let phoneNumber = place.mapItem.phoneNumber else { return }
-        
-        let cleanedPhoneNumber = phoneNumber.replacingOccurrences(of: " ", with: "")
-                                        .replacingOccurrences(of: "-", with: "")
-                                        .replacingOccurrences(of: "(", with: "")
-                                        .replacingOccurrences(of: ")", with: "")
-        
-        if let url = URL(string: "tel://\(cleanedPhoneNumber)"), UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
+        if let phoneNumber = place.mapItem.phoneNumber {
+            let formattedNumber = phoneNumber.replacingOccurrences(of: " ", with: "")
+            if let url = URL(string: "tel://\(formattedNumber)"), UIApplication.shared.canOpenURL(url) {
+                UIApplication.shared.open(url)
+            }
         }
     }
     
     private func openWebsite() {
-        guard let url = place.mapItem.url, UIApplication.shared.canOpenURL(url) else { return }
-        UIApplication.shared.open(url)
+        if let url = place.mapItem.url, UIApplication.shared.canOpenURL(url) {
+            UIApplication.shared.open(url)
+        }
     }
     
     private func openMenu() {
-        // Mock - would open menu URL if available
+        // Would open menu URL if available
     }
     
     private func showMoreOptions() {
         // Would show additional options
-    }
-    
-    private func addToFavorites() {
-        // Would add to favorites
     }
     
     // Helper function to get color based on location index
@@ -559,6 +497,30 @@ struct ActionButton: View {
     let icon: String
     let action: () -> Void
     
+    @State private var isAvailable: Bool = true
+    
+    // Determine availability based on place data and button type
+    init(title: String, icon: String, action: @escaping () -> Void) {
+        self.title = title
+        self.icon = icon
+        self.action = action
+        
+        // Set initial availability state based on context
+        switch icon {
+        case "phone":
+            // Phone button should be disabled if no phone number
+            _isAvailable = State(initialValue: title == "Call" ? UIApplication.shared.canOpenURL(URL(string: "tel://123456789")!) : true)
+        case "safari":
+            // Website button should be disabled if no website
+            _isAvailable = State(initialValue: title == "Website" ? UIApplication.shared.canOpenURL(URL(string: "https://apple.com")!) : true)
+        case "doc.text":
+            // Menu button should be disabled for non-food places
+            _isAvailable = State(initialValue: true)
+        default:
+            _isAvailable = State(initialValue: true)
+        }
+    }
+    
     var body: some View {
         Button(action: action) {
             VStack {
@@ -569,51 +531,16 @@ struct ActionButton: View {
                     
                     Image(systemName: icon)
                         .font(.system(size: 24))
-                        .foregroundColor(.blue)
+                        .foregroundColor(isAvailable ? .blue : .gray)
                 }
                 
                 Text(title)
                     .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(isAvailable ? .primary : .secondary)
             }
         }
-    }
-}
-
-struct TabButton: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Text(title)
-                    .font(.footnote)
-                    .fontWeight(isSelected ? .semibold : .regular)
-                    .foregroundColor(isSelected ? .primary : .secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                
-                Rectangle()
-                    .fill(isSelected ? Color.blue : Color.clear)
-                    .frame(height: 3)
-            }
-        }
-    }
-}
-
-struct RatingStars: View {
-    let rating: Double
-    
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(1...5, id: \.self) { index in
-                Image(systemName: index <= Int(rating) ? "star.fill" : 
-                               (Double(index) - 0.5 <= rating ? "star.leadinghalf.filled" : "star"))
-                    .foregroundColor(.orange)
-                    .font(.system(size: 14))
-            }
-        }
+        .opacity(isAvailable ? 1.0 : 0.5)
+        .disabled(!isAvailable)
     }
 }
 

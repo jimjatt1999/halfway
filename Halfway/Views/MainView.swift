@@ -51,6 +51,18 @@ struct MainView: View {
         "Somewhere in the middle..."
     ]
     
+    // Tutorial tooltip state
+    @State private var showTutorialManager = false
+    
+    // Anchors for tooltips
+    @State private var mapExpandButtonAnchor: Anchor<CGPoint>? = nil
+    @State private var addLocationButtonAnchor: Anchor<CGPoint>? = nil
+    @State private var searchRadiusAnchor: Anchor<CGPoint>? = nil
+    @State private var filterButtonAnchor: Anchor<CGPoint>? = nil
+    
+    // Add isFullScreen state variable to ResultsPanel
+    @State private var isFullScreen = false
+    
     init(viewModel: HalfwayViewModel = HalfwayViewModel(locationManager: LocationManager())) {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
@@ -82,10 +94,10 @@ struct MainView: View {
                         // Animated title
                         HStack(spacing: 0) {
                             Text("Half")
-                                .font(.title)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                                .shadow(radius: 2)
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .shadow(radius: 2)
                                 .offset(x: halfOffset)
                                 .scaleEffect(titleScale)
                                 .opacity(titleOpacity)
@@ -123,7 +135,7 @@ struct MainView: View {
                                     )
                             }
                             
-                            // Expand button
+                            // Expand button with anchor for tooltip
                             Button(action: {
                                 withAnimation(.spring(duration: 0.3)) {
                                     isExpanded.toggle()
@@ -138,6 +150,9 @@ struct MainView: View {
                                             .fill(Color.black.opacity(0.7))
                                             .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                                     )
+                                    .anchorPreference(key: ViewAnchorKey.self, value: .center) { anchor in
+                                        [ViewAnchorKey.ID.mapExpandButton: anchor]
+                                    }
                             }
                         }
                         .padding(.trailing)
@@ -169,6 +184,10 @@ struct MainView: View {
                         .transition(.opacity)
                         .animation(.spring(), value: viewModel.filteredPlaces)
                         .animation(.spring(), value: searchText)
+                        // Add anchor for search radius slider
+                        .anchorPreference(key: ViewAnchorKey.self, value: .center) { anchor in
+                            [ViewAnchorKey.ID.searchRadius: anchor]
+                        }
                     }
                 }
             } else {
@@ -262,8 +281,8 @@ struct MainView: View {
                         .edgesIgnoringSafeArea(.all)
                     
                     // Dark overlay for better text contrast
-                    Color.black.opacity(0.5)
-                        .edgesIgnoringSafeArea(.all)
+                Color.black.opacity(0.5)
+                    .edgesIgnoringSafeArea(.all)
                 }
                 
                 VStack(spacing: 20) {
@@ -292,9 +311,9 @@ struct MainView: View {
                         .transition(.opacity)
                     
                     // Improved progress indicator
-                    ProgressView()
+                ProgressView()
                         .scaleEffect(1.5)
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .padding(.top, 10)
                 }
                 .onAppear {
@@ -302,6 +321,16 @@ struct MainView: View {
                     animateLoadingTitle()
                     startSubtitleAnimation()
                 }
+            }
+            
+            // Add the tutorial manager
+            if showTutorialManager {
+                FloatingTutorialManager(
+                    mapExpandAnchor: mapExpandButtonAnchor,
+                    addLocationAnchor: addLocationButtonAnchor,
+                    filterResultsAnchor: filterButtonAnchor,
+                    searchRadiusAnchor: searchRadiusAnchor
+                )
             }
         }
         .sheet(isPresented: $isLocationSearching) {
@@ -349,17 +378,18 @@ struct MainView: View {
                     .controlSize(.large)
                     
                     Button("Add to Location \(viewModel.locations.count + 1)") {
-                        // Add the location to the proper slot
-                        let index = min(2, viewModel.locations.count)
-                        switch index {
-                        case 0:
-                            viewModel.setLocation1(location)
-                        case 1:
-                            viewModel.setLocation2(location)
-                        case 2:
+                        // Add the location to the proper slot based on current count
+                        let index = viewModel.locations.count
+                        if index < 2 {
+                            // Use legacy methods for first two locations for backward compatibility
+                            if index == 0 {
+                                viewModel.setLocation1(location)
+                            } else {
+                                viewModel.setLocation2(location)
+                            }
+                        } else {
+                            // Use the generic method for additional locations
                             viewModel.addLocation(location)
-                        default:
-                            break
                         }
                         
                         // Clear the locationFromMap to dismiss the sheet
@@ -418,9 +448,16 @@ struct MainView: View {
                 queue: .main
             ) { notification in
                 if let location = notification.object as? Location {
-                    // Only show the sheet if we have room for more locations (max 3)
-                    if viewModel.locations.count < 3 {
+                    // Only show the sheet if we have room for more locations
+                    if viewModel.canAddLocation {
                         locationFromMap = location
+                    } else {
+                        // Show a temporary notification that we've reached the max number of locations
+                        let generator = UINotificationFeedbackGenerator()
+                        generator.notificationOccurred(.warning)
+                        
+                        // Show a toast message
+                        showToast(message: "Maximum of 5 locations reached")
                     }
                 }
             }
@@ -428,6 +465,17 @@ struct MainView: View {
             if viewModel.locations.isEmpty {
                 animateTitle()
             }
+            
+            // Delay showing tutorials until after the app is fully loaded
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                showTutorialManager = true
+            }
+        }
+        .onPreferenceChange(ViewAnchorKey.self) { preferences in
+            self.mapExpandButtonAnchor = preferences[.mapExpandButton]
+            self.addLocationButtonAnchor = preferences[.addLocationButton]
+            self.searchRadiusAnchor = preferences[.searchRadius]
+            self.filterButtonAnchor = preferences[.filterButton]
         }
     }
     
@@ -565,7 +613,7 @@ struct MainView: View {
                     .contentShape(Rectangle())
                     .frame(height: 36)
                     .padding(.horizontal, 12)
-                    .background(
+            .background(
                         RoundedRectangle(cornerRadius: 12)
                             .fill(Color(UIColor.secondarySystemBackground))
                     )
@@ -756,6 +804,48 @@ struct MainView: View {
             }
         }
     }
+    
+    // Add showToast method to MainView class
+    func showToast(message: String) {
+        let toast = UILabel()
+        toast.text = message
+        toast.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        toast.textColor = .white
+        toast.textAlignment = .center
+        toast.font = UIFont.systemFont(ofSize: 14)
+        toast.alpha = 0
+        toast.layer.cornerRadius = 16
+        toast.clipsToBounds = true
+        toast.frame = CGRect(x: 0, y: 0, width: 280, height: 40)
+        
+        // Get the key window using the UIScene API for iOS 15+
+        var keyWindow: UIWindow?
+        
+        if #available(iOS 15.0, *) {
+            keyWindow = UIApplication.shared.connectedScenes
+                .filter { $0.activationState == .foregroundActive }
+                .first(where: { $0 is UIWindowScene })
+                .flatMap { $0 as? UIWindowScene }?.windows
+                .first(where: { $0.isKeyWindow })
+        } else {
+            keyWindow = UIApplication.shared.windows.first(where: { $0.isKeyWindow })
+        }
+        
+        if let window = keyWindow {
+            toast.center = CGPoint(x: window.frame.width/2, y: window.frame.height - 120)
+            window.addSubview(toast)
+            
+            UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseIn, animations: {
+                toast.alpha = 1
+            }, completion: { _ in
+                UIView.animate(withDuration: 0.3, delay: 1.5, options: .curveEaseOut, animations: {
+                    toast.alpha = 0
+                }, completion: { _ in
+                    toast.removeFromSuperview()
+                })
+            })
+        }
+    }
 }
 
 struct ResultsPanel: View {
@@ -783,6 +873,9 @@ struct ResultsPanel: View {
     @State private var isDragging = false
     @State private var dragState = CGSize.zero
     
+    // Add isFullScreen state variable to ResultsPanel
+    @State private var isFullScreen = false
+    
     init(viewModel: HalfwayViewModel, 
          resetLocations: Binding<Bool>,
          mapRegion: Binding<MKCoordinateRegion>,
@@ -808,42 +901,161 @@ struct ResultsPanel: View {
             // Floating card similar to search panel (not stretched to edges)
             VStack(spacing: 0) {
                 // Only show the header and minimap when not actively searching or keyboard is not visible
-                if !isKeyboardVisible {
-                    headerView
+                // and when not in full-screen mode
+                if !isKeyboardVisible && !isFullScreen {
+                headerView
+                } else if isFullScreen {
+                    // Custom header for full-screen mode
+                    HStack {
+                        Button(action: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                isFullScreen = false
+                            }
+                        }) {
+                            Image(systemName: "chevron.down")
+                                .foregroundColor(.primary)
+                                .padding(10)
+                                .background(Color(UIColor.tertiarySystemBackground))
+                                .clipShape(Circle())
+                        }
+                        
+                        Spacer()
+                        
+                        VStack(spacing: 4) {
+                            Text("\(viewModel.filteredPlaces.count) places found")
+                                .font(.headline)
+                                .fontWeight(.bold)
+                            
+                            if viewModel.locations.count > 0 {
+                                Text("\(viewModel.locations.count) locations selected")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            if !searchText.isEmpty {
+                                searchText = ""
+                                viewModel.searchText = ""
+                                viewModel.filterPlacesWithCurrentSettings()
+                            }
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(searchText.isEmpty ? .clear : .gray)
+                                .padding(10)
+                                .background(searchText.isEmpty ? Color.clear : Color(UIColor.tertiarySystemBackground))
+                                .clipShape(Circle())
+                                .opacity(searchText.isEmpty ? 0 : 1)
+                        }
+                        .disabled(searchText.isEmpty)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+                    .padding(.bottom, 10)
                 }
+                
                 searchBarView
                 
-                // Only show these components when keyboard is not visible
-                if !isKeyboardVisible {
-                    miniMapView
-                    radiusControlView
+                // Only show these components when keyboard is not visible and not in full-screen mode
+                if !isKeyboardVisible && !isFullScreen {
+                miniMapView
+                radiusControlView
                     // Only show category filter when not actively searching
                     if !isActivelySearching {
-                        categorySelectionView
+                categorySelectionView
                     }
+                } else if isFullScreen && !isKeyboardVisible {
+                    // When in full-screen mode, show radius and category controls in a more compact layout
+                    HStack(spacing: 16) {
+                        // Compact radius control
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Radius: \(viewModel.searchRadius, specifier: "%.1f") km")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Slider(value: Binding(
+                                get: { viewModel.searchRadius },
+                                set: { viewModel.updateSearchRadius($0) }
+                            ), in: 0.5...viewModel.maxSearchRadius, step: 0.1)
+                            .frame(width: 140)
+                            .accentColor(Color(.systemGray3))
+                        }
+                        
+                        Divider()
+                            .frame(height: 30)
+                        
+                        // Category selection as a horizontal scroll
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                Button(action: {
+                                    viewModel.selectedCategory = nil
+                                    viewModel.filterPlacesWithCurrentSettings()
+                                }) {
+                                    Text("All")
+                                        .font(.caption)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .fill(viewModel.selectedCategory == nil ? Color.accentColor : Color(.systemGray6))
+                                        )
+                                        .foregroundColor(viewModel.selectedCategory == nil ? .white : .primary)
+                                }
+                                
+                                ForEach(PlaceCategory.allCases, id: \.self) { category in
+                                    Button(action: {
+                                        viewModel.filterByCategory(category)
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: category.icon)
+                                                .font(.system(size: 10))
+                                            Text(category.rawValue)
+                                                .font(.caption)
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .fill(viewModel.selectedCategory == category ? Color.accentColor : Color(.systemGray6))
+                                        )
+                                        .foregroundColor(viewModel.selectedCategory == category ? .white : .primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
                 }
                 
-                // Adjusted placeListView that adapts based on keyboard visibility
+                // Adjusted placeListView that adapts based on keyboard visibility and full-screen mode
                 if isKeyboardVisible {
                     // When keyboard is visible, only show search results in a more compact form
                     placeListViewCompact
                 } else {
                     // Regular place list view when keyboard is not visible
-                    placeListView
+                placeListView
                 }
             }
             .background(
-                RoundedRectangle(cornerRadius: 24)
+                RoundedRectangle(cornerRadius: isFullScreen ? 0 : 24)
                     .fill(Color(UIColor.systemBackground))
-                    .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: -5)
+                    .shadow(color: Color.black.opacity(isFullScreen ? 0 : 0.2), radius: 10, x: 0, y: -5)
             )
             .offset(y: dragState.height)
-            // Add drag gesture to allow returning to search
-            .gesture(dragGesture)
+            // Add drag gesture to allow returning to search, but disable in full-screen mode
+            .gesture(isFullScreen ? nil : dragGesture)
+            // Apply animation for smoother transitions
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isFullScreen)
         }
-        // Adjust height based on keyboard visibility
-        .frame(maxHeight: isKeyboardVisible ? min(UIScreen.main.bounds.height * 0.5, 350) : UIScreen.main.bounds.height * 0.9)
-        .edgesIgnoringSafeArea(.bottom)
+        // Adjust height and edges based on full-screen mode
+        .frame(maxHeight: isFullScreen ? UIScreen.main.bounds.height : 
+                            (isKeyboardVisible ? min(UIScreen.main.bounds.height * 0.5, 350) : UIScreen.main.bounds.height * 0.9))
+        .edgesIgnoringSafeArea(isFullScreen ? .all : .bottom)
+        // Add a status bar color fix for full-screen mode
+        .statusBar(hidden: isFullScreen)
         // Add keyboard notifications to adjust UI when keyboard appears
         .onAppear {
             NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { _ in
@@ -879,7 +1091,7 @@ struct ResultsPanel: View {
     // MARK: - Component Views
     
     private var headerView: some View {
-        HStack {
+            HStack {
             Button(action: {
                 withAnimation {
                     // Clear places and return to search
@@ -893,8 +1105,8 @@ struct ResultsPanel: View {
                     .background(Color(UIColor.tertiarySystemBackground))
                     .clipShape(Circle())
             }
-            
-            Spacer()
+                
+                    Spacer()
             
             VStack(spacing: 4) {
                 // Results header with count
@@ -919,33 +1131,37 @@ struct ResultsPanel: View {
             }
             
             Spacer()
-        }
-        .padding(.horizontal, 20)
+            }
+            .padding(.horizontal, 20)
         .padding(.top, 20)
         .padding(.bottom, 10)
     }
     
-    // Enhanced search bar with modern design - add Done button when keyboard is visible
+    // Modify the searchBarView to be more compact
     private var searchBarView: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.gray)
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.gray)
+                    .padding(.leading, 2)
                 
                 TextField("Search", text: $searchText, onEditingChanged: { isEditing in
                     withAnimation(.easeInOut(duration: 0.3)) {
                         isKeyboardVisible = isEditing
                     }
                 })
-                .frame(height: 36)
-                
-                if !searchText.isEmpty {
-                    Button(action: {
-                        searchText = ""
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
+                .font(.system(size: 15))
+                .frame(height: 28) // Reduced height
+            
+            if !searchText.isEmpty {
+                Button(action: {
+                    searchText = ""
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.gray)
+                            .font(.system(size: 15))
                     }
+                    .padding(.trailing, 2)
                 }
                 
                 if isKeyboardVisible {
@@ -957,15 +1173,26 @@ struct ResultsPanel: View {
                     }) {
                         Text("Done")
                             .foregroundColor(.accentColor)
-                            .font(.subheadline)
-                            .padding(.horizontal, 8)
+                            .font(.footnote)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 6)
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(.systemGray6))
-            .cornerRadius(10)
+            .padding(.horizontal, 10) // Reduced padding
+            .padding(.vertical, 6) // Reduced padding
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(.systemGray6))
+                    .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.gray.opacity(0.2), lineWidth: 0.5)
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 6) // Reduced padding
+            .padding(.bottom, 4) // Reduced padding
             
             // Add horizontal scroll for common search categories when keyboard is visible
             if isKeyboardVisible {
@@ -979,12 +1206,18 @@ struct ResultsPanel: View {
                                     .font(.caption)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 6)
-                                    .background(Color(.systemGray5))
-                                    .cornerRadius(16)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .fill(Color(.systemGray5))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.gray.opacity(0.2), lineWidth: 0.5)
+                                    )
                             }
                         }
                     }
-                    .padding(.horizontal)
+                    .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                 }
             }
@@ -1065,7 +1298,7 @@ struct ResultsPanel: View {
                 set: { viewModel.updateSearchRadius($0) }
             ), in: 0.5...viewModel.maxSearchRadius, step: 0.1)
                 .padding(.horizontal, 20)
-                .accentColor(.black)
+                .accentColor(Color(.systemGray3))
                 .animation(nil, value: viewModel.searchRadius) // Removes animation on slider itself
                 .onChange(of: viewModel.maxSearchRadius) { newMax in
                     // Make sure search radius is within bounds when max changes
@@ -1095,14 +1328,14 @@ struct ResultsPanel: View {
                         icon: "line.3.horizontal.decrease.circle",
                         isSelected: viewModel.selectedCategory == nil,
                         action: {
-                            viewModel.selectedCategory = nil
+                    viewModel.selectedCategory = nil
                             previousCategory = nil
-                            viewModel.filterPlacesWithCurrentSettings()
-                        }
+                    viewModel.filterPlacesWithCurrentSettings()
+                }
                     )
-                    
+                
                     // Category Buttons
-                    ForEach(PlaceCategory.allCases, id: \.self) { category in
+                ForEach(PlaceCategory.allCases, id: \.self) { category in
                         CategoryFilterButton(
                             title: category.rawValue,
                             icon: category.icon,
@@ -1153,6 +1386,7 @@ struct ResultsPanel: View {
         }
     }
     
+    // Modify the placeListView to add a more visible expand button and handle full-screen mode
     private var placeListView: some View {
         VStack(spacing: 0) {
             HStack {
@@ -1162,9 +1396,9 @@ struct ResultsPanel: View {
                         .font(.headline)
                         .foregroundColor(.primary)
                 } else {
-                    Text("Results")
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                Text("Results")
+                    .font(.headline)
+                    .foregroundColor(.primary)
                 }
                 
                 Spacer()
@@ -1174,10 +1408,28 @@ struct ResultsPanel: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
+                
+                // Add more visible expand button
+                Button(action: {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        isFullScreen.toggle()
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        Text(isFullScreen ? "Minimize" : "Expand")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.systemGray6).opacity(0.8))
+                    .cornerRadius(8)
+                }
+                .padding(.leading, 8)
             }
             .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 10)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
             
             if viewModel.filteredPlaces.isEmpty {
                 VStack(spacing: 16) {
@@ -1213,11 +1465,11 @@ struct ResultsPanel: View {
                         }
                         .padding(.top, 8)
                     } else {
-                        Text("No matching places found")
-                            .foregroundColor(.secondary)
-                        Text("Try adjusting your search or filters")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    Text("No matching places found")
+                        .foregroundColor(.secondary)
+                    Text("Try adjusting your search or filters")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     }
                 }
                 .padding(.vertical, 40)
@@ -1234,7 +1486,7 @@ struct ResultsPanel: View {
                         }
                     }
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
+                    .padding(.bottom, isFullScreen ? 100 : 20) // Add extra padding at bottom when in full screen
                 }
             }
         }
@@ -1261,6 +1513,10 @@ struct ResultsPanel: View {
                             Text("Clear")
                                 .font(.footnote)
                                 .foregroundColor(.blue)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(.systemGray6).opacity(0.5))
+                                .cornerRadius(8)
                         }
                     }
                     .padding(.horizontal, 20)
@@ -1268,38 +1524,62 @@ struct ResultsPanel: View {
                 }
             } else {
                 // Show a small scrollable list of results
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(viewModel.filteredPlaces.prefix(5), id: \.id) { place in
-                            PlaceRowCompact(place: place, onTap: {
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    viewModel.selectedPlace = place
-                                    viewModel.keyboardVisible = false
-                                    hideKeyboard()
-                                }
-                            })
-                            .padding(.horizontal)
-                            Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Quick Results")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                    
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(viewModel.filteredPlaces.prefix(5), id: \.id) { place in
+                                PlaceRowCompact(place: place, onTap: {
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        viewModel.selectedPlace = place
+                                        viewModel.keyboardVisible = false
+                                        hideKeyboard()
+                                    }
+                                })
                                 .padding(.horizontal)
-                        }
-                        
-                        if viewModel.filteredPlaces.count > 5 {
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    viewModel.keyboardVisible = false
-                                    hideKeyboard()
+                                .padding(.vertical, 4)
+                                
+                                if place.id != viewModel.filteredPlaces.prefix(5).last?.id {
+                                    Divider()
+                                        .padding(.horizontal)
                                 }
-                            }) {
-                                Text("See all \(viewModel.filteredPlaces.count) results")
-                                    .font(.caption)
-                                    .foregroundColor(.accentColor)
+                            }
+                            
+                            if viewModel.filteredPlaces.count > 5 {
+                                Button(action: {
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        viewModel.keyboardVisible = false
+                                        hideKeyboard()
+                                    }
+                                }) {
+                                    HStack {
+                                        Text("See all \(viewModel.filteredPlaces.count) results")
+                                            .font(.caption)
+                                            .foregroundColor(.white)
+                                        
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2)
+                                            .foregroundColor(.white)
+                                    }
+                                    .frame(maxWidth: .infinity)
                                     .padding(.vertical, 8)
+                                    .background(Color.accentColor)
+                                    .cornerRadius(8)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 8)
+                                }
                             }
                         }
+                        .padding(.vertical, 6)
                     }
-                    .padding(.vertical, 10)
+                    .frame(maxHeight: 240)
                 }
-                .frame(maxHeight: 200)
             }
         }
         .background(
@@ -1323,17 +1603,37 @@ struct ResultsPanel: View {
                 ZStack {
                     Circle()
                         .fill(Color(UIColor(named: place.category.color) ?? .gray).opacity(0.2))
-                        .frame(width: 32, height: 32)
+                        .frame(width: 36, height: 36)
                     
                     Image(systemName: place.category.icon)
-                        .font(.system(size: 15))
+                        .font(.system(size: 16))
                         .foregroundColor(Color(UIColor(named: place.category.color) ?? .gray))
                 }
                 
-                // Place name
-                Text(place.name)
-                    .font(.system(size: 15, weight: .medium))
-                    .lineLimit(1)
+                // Place details
+                VStack(alignment: .leading, spacing: 2) {
+                    // Place name
+                    Text(place.name)
+                        .font(.system(size: 15, weight: .medium))
+                        .lineLimit(1)
+                    
+                    // Added short description using available data
+                    if let thoroughfare = place.mapItem.placemark.thoroughfare {
+                        Text(thoroughfare)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        // Directly use the distance property without optional binding
+                        let distance = place.distanceFromMidpoint
+                        let distanceStr = distance < 1000 ? 
+                            "\(Int(distance))m away" : 
+                            String(format: "%.1f km away", distance / 1000)
+                        Text(distanceStr)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 
                 Spacer()
                 
@@ -1344,8 +1644,11 @@ struct ResultsPanel: View {
                     .opacity(0.7)
             }
             .padding(.vertical, 8)
-            .background(Color.clear)
-            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.clear)
+                    .contentShape(Rectangle())
+            )
             .onTapGesture {
                 onTap()
             }

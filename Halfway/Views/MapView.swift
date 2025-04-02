@@ -149,8 +149,8 @@ struct MapView: UIViewRepresentable {
                     allPoints.append(contentsOf: locs.map { $0.coordinate })
                 } else {
                     // For backward compatibility
-                    if let loc1 = location1?.coordinate { allPoints.append(loc1) }
-                    if let loc2 = location2?.coordinate { allPoints.append(loc2) }
+                if let loc1 = location1?.coordinate { allPoints.append(loc1) }
+                if let loc2 = location2?.coordinate { allPoints.append(loc2) }
                 }
                 
                 if !allPoints.isEmpty {
@@ -454,42 +454,42 @@ struct MapView: UIViewRepresentable {
         
         // Helper to display toast message
         private func showToast(message: String, in view: UIView) {
-            let toastView = UIView()
-            toastView.backgroundColor = UIColor.black.withAlphaComponent(0.7)
-            toastView.layer.cornerRadius = 16
-            toastView.clipsToBounds = true
+                        let toastView = UIView()
+                        toastView.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+                        toastView.layer.cornerRadius = 16
+                        toastView.clipsToBounds = true
             toastView.alpha = 0
-            
-            let label = UILabel()
+                        
+                        let label = UILabel()
             label.text = message
-            label.textColor = .white
-            label.font = UIFont.systemFont(ofSize: 14, weight: .medium)
-            label.textAlignment = .center
-            
-            toastView.addSubview(label)
-            label.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                label.centerXAnchor.constraint(equalTo: toastView.centerXAnchor),
-                label.centerYAnchor.constraint(equalTo: toastView.centerYAnchor),
-                label.leadingAnchor.constraint(equalTo: toastView.leadingAnchor, constant: 16),
-                label.trailingAnchor.constraint(equalTo: toastView.trailingAnchor, constant: -16)
-            ])
-            
+                        label.textColor = .white
+                        label.font = UIFont.systemFont(ofSize: 14, weight: .medium)
+                        label.textAlignment = .center
+                        
+                        toastView.addSubview(label)
+                        label.translatesAutoresizingMaskIntoConstraints = false
+                        NSLayoutConstraint.activate([
+                            label.centerXAnchor.constraint(equalTo: toastView.centerXAnchor),
+                            label.centerYAnchor.constraint(equalTo: toastView.centerYAnchor),
+                            label.leadingAnchor.constraint(equalTo: toastView.leadingAnchor, constant: 16),
+                            label.trailingAnchor.constraint(equalTo: toastView.trailingAnchor, constant: -16)
+                        ])
+                        
             toastView.frame = CGRect(x: 0, y: 0, width: 150, height: 40)
             toastView.center = CGPoint(x: view.center.x, y: view.center.y - 50)
             view.addSubview(toastView)
             
             // Show and hide the toast with animation
-            UIView.animate(withDuration: 0.2, animations: {
-                toastView.alpha = 1
+                        UIView.animate(withDuration: 0.2, animations: {
+                            toastView.alpha = 1
             }) { _ in
                 UIView.animate(withDuration: 0.2, delay: 1.5, options: [], animations: {
-                    toastView.alpha = 0
-                }) { _ in
-                    toastView.removeFromSuperview()
-                }
-            }
-        }
+                                toastView.alpha = 0
+                            }) { _ in
+                                toastView.removeFromSuperview()
+                            }
+                        }
+                    }
         
         // Helper to format address from a placemark
         private func formatPlacemarkAddress(_ placemark: CLPlacemark) -> String? {
