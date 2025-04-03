@@ -165,10 +165,10 @@ struct MapView: UIViewRepresentable {
             mapView.isScrollEnabled = true
             mapView.isRotateEnabled = true
             
-            // Only set region in specific scenarios for main map:
+            // Check if we should update the region
             // 1. Initial load (userInteracted is false)
             // 2. Expanded state changes
-            // 3. Explicit reset request
+            // 3. Explicit reset request via ResetMapInteraction notification
             let shouldSetRegion = !context.coordinator.userInteracted || 
                                   context.coordinator.lastExpandedState != isExpanded
             
@@ -195,9 +195,11 @@ struct MapView: UIViewRepresentable {
                     } else {
                         mapView.setRegion(region, animated: true)
                     }
-                } else if !isExpanded && !context.coordinator.userInteracted {
-                    // Only set region on first load of non-expanded map
-                    mapView.setRegion(region, animated: false)
+                } else {
+                    // This handles both initial load and reset from location button
+                    // When userInteracted is false, the map will follow the region binding
+                    // which gets updated when the location button is pressed
+                    mapView.setRegion(region, animated: true)
                 }
                 
                 context.coordinator.lastExpandedState = isExpanded
@@ -352,7 +354,12 @@ struct MapView: UIViewRepresentable {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
+                // This is the fix - reset user interaction state
                 self?.userInteracted = false
+                
+                // Also provide haptic feedback to confirm the action
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.impactOccurred()
             }
             
             // Add observer for expanded state changes - but don't reset interaction flag

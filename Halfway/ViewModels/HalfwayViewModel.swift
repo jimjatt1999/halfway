@@ -920,6 +920,10 @@ class HalfwayViewModel: ObservableObject {
             return // No change, avoid unnecessary search
         }
         
+        // Provide haptic feedback when radius changes
+        let generator = UISelectionFeedbackGenerator()
+        generator.selectionChanged()
+        
         // Update immediately for smooth slider movement
         self.searchRadius = constrainedRadius
         

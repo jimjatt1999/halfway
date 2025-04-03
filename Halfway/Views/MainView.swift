@@ -60,7 +60,6 @@ struct MainView: View {
         "Convincing GPS satellites to work together...",
         "Teaching maps to understand compromise...",
         "The app equivalent of saying 'let's meet in the middle'...",
-        "Preventing 'but your place is closer' debates since 2023...",
         "Drawing a line between you both and finding the good stuff...",
         "Creating peace and harmony through equidistant meetups..."
     ]
@@ -149,6 +148,40 @@ struct MainView: View {
                                     )
                             }
                             
+                            // Midpoint navigation button
+                            Button(action: {
+                                if let midpoint = viewModel.midpoint {
+                                    // Make sure to reset the user interaction flag immediately
+                                    NotificationCenter.default.post(
+                                        name: NSNotification.Name("ResetMapInteraction"),
+                                        object: nil
+                                    )
+                                    
+                                    // Set map region to focus on midpoint with instant animation
+                                    // Use a more focused zoom level for better visibility
+                                    mapRegion = MKCoordinateRegion(
+                                        center: midpoint,
+                                        span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                                    )
+                                    
+                                    // Show feedback with haptics
+                                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                                    generator.impactOccurred()
+                                }
+                            }) {
+                                Image(systemName: "location")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .frame(width: 40, height: 40)
+                                    .background(
+                                        Circle()
+                                            .fill(Color.black.opacity(0.7))
+                                            .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                                    )
+                            }
+                            .disabled(viewModel.midpoint == nil)
+                            .opacity(viewModel.midpoint == nil ? 0.5 : 1.0)
+                            
                             // Expand button with anchor for tooltip
                             Button(action: {
                                 withAnimation(.spring(duration: 0.3)) {
@@ -235,28 +268,25 @@ struct MainView: View {
                                     )
                             }
                             
-                            // Return to Midpoint button with improved implementation
+                            // Midpoint navigation button
                             Button(action: {
                                 if let midpoint = viewModel.midpoint {
-                                    // Set map region to focus on midpoint and locations
-                                    var allPoints: [CLLocationCoordinate2D] = [midpoint]
-                                    if !viewModel.locations.isEmpty {
-                                        allPoints.append(contentsOf: viewModel.locations.map { $0.coordinate })
-                                    }
+                                    // Make sure to reset the user interaction flag immediately
+                                    NotificationCenter.default.post(
+                                        name: NSNotification.Name("ResetMapInteraction"),
+                                        object: nil
+                                    )
                                     
-                                    // Calculate region that fits all points
-                                    withAnimation(.easeInOut) {
-                                        mapRegion = calculateRegion(for: allPoints)
-                                    }
+                                    // Set map region to focus on midpoint with instant animation
+                                    // Use a more focused zoom level for better visibility
+                                    mapRegion = MKCoordinateRegion(
+                                        center: midpoint,
+                                        span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                                    )
                                     
-                                    // Force MapView to reset user interaction state
-                                    // This is a workaround to ensure the MapView properly responds
-                                    DispatchQueue.main.async {
-                                        NotificationCenter.default.post(
-                                            name: NSNotification.Name("ResetMapInteraction"),
-                                            object: nil
-                                        )
-                                    }
+                                    // Show feedback with haptics
+                                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                                    generator.impactOccurred()
                                 }
                             }) {
                                 Image(systemName: "location")
@@ -269,6 +299,8 @@ struct MainView: View {
                                             .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                                     )
                             }
+                            .disabled(viewModel.midpoint == nil)
+                            .opacity(viewModel.midpoint == nil ? 0.5 : 1.0)
                             
                             // Collapse button
                             Button(action: {
@@ -1170,7 +1202,7 @@ struct ResultsPanel: View {
                     // Clear search text
                     searchText = ""
                     viewModel.searchText = ""
-                    // Also clear the noResultsReason to ensure we go back to search panel
+                    // Also clear the noResultsReason
                     viewModel.noResultsReason = nil
                 }
             }) {
@@ -1233,10 +1265,17 @@ struct ResultsPanel: View {
                 })
                 .font(.system(size: 15))
                 .frame(height: 28) // Reduced height
+                .onChange(of: searchText) { newValue in
+                    // Sync the searchText with the viewModel and trigger filtering
+                    viewModel.searchText = newValue
+                    viewModel.filterPlacesWithCurrentSettings()
+                }
             
             if !searchText.isEmpty {
                 Button(action: {
                     searchText = ""
+                    viewModel.searchText = ""
+                    viewModel.filterPlacesWithCurrentSettings()
                 }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.gray)
@@ -1282,6 +1321,10 @@ struct ResultsPanel: View {
                         ForEach(["Restaurant", "Cafe", "Bar", "Park", "Food", "Coffee", "Drinks"], id: \.self) { category in
                             Button(action: {
                                 searchText = category.lowercased()
+                                viewModel.searchText = category.lowercased()
+                                viewModel.filterPlacesWithCurrentSettings()
+                                // Optionally hide keyboard to show results
+                                hideKeyboard()
                             }) {
                                 Text(category)
                                     .font(.caption)
