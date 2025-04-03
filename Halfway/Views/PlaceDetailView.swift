@@ -7,7 +7,10 @@ struct PlaceDetailView: View {
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.colorScheme) var colorScheme
     @State private var selectedTab = 0
-    @State private var showShareToast = false
+    @State private var shareContent: String = ""
+    @State private var shareItems: [Any] = []
+    @State private var showShareSheet: Bool = false
+    @State private var shareData: ShareData? = nil
     
     // For backwards compatibility
     init(place: Place, location1: Location?, location2: Location?) {
@@ -69,13 +72,13 @@ struct PlaceDetailView: View {
                     HStack(spacing: 16) {
                         // Transport times buttons for each location
                         ForEach(0..<min(locations.count, 3), id: \.self) { index in
-                            VStack {
-                                ZStack {
-                                    Circle()
+                        VStack {
+                            ZStack {
+                                Circle()
                                         .fill(locationColor(for: index))
-                                        .frame(width: 60, height: 60)
-                                    
-                                    VStack(spacing: 0) {
+                                    .frame(width: 60, height: 60)
+                                
+                                VStack(spacing: 0) {
                                         Text("\(index + 1)")
                                             .font(.system(size: 13, weight: .bold))
                                             .foregroundColor(.white)
@@ -102,17 +105,17 @@ struct PlaceDetailView: View {
                         
                         // Only show Call button if phone number is available
                         if place.mapItem.phoneNumber != nil {
-                            ActionButton(title: "Call", icon: "phone", action: makeCall)
+                        ActionButton(title: "Call", icon: "phone", action: makeCall)
                         }
                         
                         // Only show Website button if URL is available
                         if place.mapItem.url != nil {
-                            ActionButton(title: "Website", icon: "safari", action: openWebsite)
+                        ActionButton(title: "Website", icon: "safari", action: openWebsite)
                         }
                         
                         // Only show Menu button for restaurants, cafes and bars
                         if place.category == .restaurant || place.category == .cafe || place.category == .bar {
-                            ActionButton(title: "Menu", icon: "doc.text", action: openMenu)
+                        ActionButton(title: "Menu", icon: "doc.text", action: openMenu)
                         }
                         
                         // Share button
@@ -127,25 +130,25 @@ struct PlaceDetailView: View {
                 
                 // Information tab - only show distance since that's reliable data
                 VStack(spacing: 0) {
-                    // Distance tab
-                    HStack {
-                        Image(systemName: "location.fill")
-                            .foregroundColor(.gray)
-                        
-                        Text(formatDistance(place.distanceFromMidpoint))
-                            .fontWeight(.medium)
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            openInMaps()
-                        }) {
-                            Text("Directions")
-                                .foregroundColor(.blue)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    .padding(.horizontal)
+                            // Distance tab
+                            HStack {
+                                Image(systemName: "location.fill")
+                                    .foregroundColor(.gray)
+                                
+                                Text(formatDistance(place.distanceFromMidpoint))
+                                    .fontWeight(.medium)
+                                
+                                Spacer()
+                                
+                                Button(action: {
+                                    openInMaps()
+                                }) {
+                                    Text("Directions")
+                                        .foregroundColor(.blue)
+                                        .fontWeight(.medium)
+                                }
+                            }
+                            .padding(.horizontal)
                     .padding(.vertical, 12)
                 }
                 
@@ -202,7 +205,7 @@ struct PlaceDetailView: View {
                                     .font(.system(size: 16, weight: .bold))
                                     .foregroundColor(.white)
                             }
-                            .frame(width: 40)
+                                .frame(width: 40)
                             
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("From \(location.name)")
@@ -244,22 +247,22 @@ struct PlaceDetailView: View {
                     VStack(spacing: 0) {
                         // Website row - only if available
                         if place.mapItem.url != nil {
-                            DetailRow(icon: "safari", title: "Website", value: "Visit Website") {
-                                openWebsite()
-                            }
-                            
-                            Divider()
-                                .padding(.leading, 56)
+                        DetailRow(icon: "safari", title: "Website", value: "Visit Website") {
+                            openWebsite()
+                        }
+                        
+                        Divider()
+                            .padding(.leading, 56)
                         }
                         
                         // Phone row - only if available
                         if let phoneNumber = place.mapItem.phoneNumber {
                             DetailRow(icon: "phone", title: "Phone", value: phoneNumber) {
-                                makeCall()
-                            }
-                            
-                            Divider()
-                                .padding(.leading, 56)
+                            makeCall()
+                        }
+                        
+                        Divider()
+                            .padding(.leading, 56)
                         }
                         
                         // Address row - combine all available address components
@@ -341,24 +344,11 @@ struct PlaceDetailView: View {
         .background(colorScheme == .dark ? Color(UIColor.systemBackground) : Color(UIColor.systemGroupedBackground))
         .edgesIgnoringSafeArea(.bottom)
         .navigationBarHidden(true)
-        .overlay(
-            // Toast message when location is copied
-            VStack {
-                Spacer()
-                
-                if showShareToast {
-                    Text("Location copied to clipboard")
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color(.systemBackground))
-                        .cornerRadius(8)
-                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
-                        .transition(.move(edge: .bottom))
-                        .padding(.bottom, 30)
-                }
-            }
-            .animation(.easeInOut(duration: 0.3), value: showShareToast)
-        )
+        .sheet(item: $shareData, onDismiss: {
+            shareData = nil
+        }) { data in
+            ShareSheet(activityItems: data.activityItems)
+        }
     }
     
     private func formatDistance(_ distance: CLLocationDistance) -> String {
@@ -411,52 +401,16 @@ struct PlaceDetailView: View {
     }
     
     private func shareLocation() {
-        // Create message with place details
-        var shareText = "I found this location on Halfway! Let's meet at: "
+        let baseMessage = "I found this location on Halfway! Let's meet at:\n\n\(place.name)"
+        let address = formatAddress() != "View Address" ? "\n\n\(formatAddress())" : ""
+        let latitude = place.coordinate.latitude
+        let longitude = place.coordinate.longitude
+        let mapsLink = "http://maps.apple.com/?ll=\(latitude),\(longitude)"
+        let shareText = "\(baseMessage)\(address)\n\n\(mapsLink)"
         
-        // Add place name and address if available
-        shareText += "\n\n\(place.name)"
-        
-        let address = formatAddress()
-        if address != "View Address" {
-            shareText += "\n\(address)"
-        }
-        
-        // Add travel times
-        shareText += "\n\nTravel times:"
-        for (index, location) in locations.enumerated() {
-            let travelTime = place.getTravelTime(forLocationIndex: index)
-            var travelInfo = ""
-            
-            if let drivingTime = travelTime.driving {
-                travelInfo += "\(drivingTime) min by car"
-            }
-            
-            if let walkingTime = travelTime.walking {
-                if !travelInfo.isEmpty {
-                    travelInfo += ", "
-                }
-                travelInfo += "\(walkingTime) min walking"
-            }
-            
-            if !travelInfo.isEmpty {
-                shareText += "\n- From \(location.name): \(travelInfo)"
-            }
-        }
-        
-        // Copy to clipboard
-        UIPasteboard.general.string = shareText
-        
-        // Show toast
-        withAnimation {
-            showShareToast = true
-        }
-        
-        // Hide toast after delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation {
-                showShareToast = false
-            }
+        // Set the shareData asynchronously to ensure the activityItems are ready
+        DispatchQueue.main.async {
+            self.shareData = ShareData(activityItems: [shareText])
         }
     }
     
@@ -464,14 +418,14 @@ struct PlaceDetailView: View {
         if let phoneNumber = place.mapItem.phoneNumber {
             let formattedNumber = phoneNumber.replacingOccurrences(of: " ", with: "")
             if let url = URL(string: "tel://\(formattedNumber)"), UIApplication.shared.canOpenURL(url) {
-                UIApplication.shared.open(url)
+            UIApplication.shared.open(url)
             }
         }
     }
     
     private func openWebsite() {
         if let url = place.mapItem.url, UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
+        UIApplication.shared.open(url)
         }
     }
     
@@ -737,4 +691,40 @@ struct AnnotationItem: Identifiable {
     let coordinate: CLLocationCoordinate2D
     let isPlace: Bool
     let index: Int
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    var activityItems: [Any]
+    var applicationActivities: [UIActivity]? = nil
+    @Environment(\.presentationMode) var presentationMode
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+        
+        // Handle completion to dismiss the share sheet
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            DispatchQueue.main.async {
+                self.presentationMode.wrappedValue.dismiss()
+            }
+        }
+        
+        // Fix iPad presentation style
+        if let popover = controller.popoverPresentationController {
+            popover.permittedArrowDirections = .any
+            popover.sourceView = UIApplication.shared.windows.first?.rootViewController?.view
+            popover.sourceRect = CGRect(x: UIScreen.main.bounds.midX, y: UIScreen.main.bounds.midY, width: 0, height: 0)
+        }
+        
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+struct ShareData: Identifiable {
+    let id = UUID()
+    let activityItems: [Any]
 } 

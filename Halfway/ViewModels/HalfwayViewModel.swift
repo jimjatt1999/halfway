@@ -63,6 +63,9 @@ class HalfwayViewModel: ObservableObject {
     // Search text work item
     private var searchTextWorkItem: DispatchWorkItem?
     
+    // Add a new published property near the other state properties
+    @Published var noResultsReason: String? = nil
+    
     // MARK: - Initialization
     
     init(locationManager: LocationManager) {
@@ -296,8 +299,19 @@ class HalfwayViewModel: ObservableObject {
     
     // Modified method to filter places based on search text and category
     func filterPlacesWithCurrentSettings() {
+        // Set loading state to indicate we're processing
+        DispatchQueue.main.async {
+            self.isFilteredPlacesLoading = true
+        }
+        
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            
+            // IMPORTANT: Make sure midpoint is calculated properly for all locations
+            if self.midpoint == nil && !self.locations.isEmpty {
+                self.calculateMidpointIfPossible()
+            }
+            
             // Create local copies to prevent any concurrent access issues
             let searchText = self.searchText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             let selectedCategory = self.selectedCategory
@@ -325,8 +339,8 @@ class HalfwayViewModel: ObservableObject {
                     
                     // Check if there's a match in the location details
                     let locationMatch = place.mapItem.placemark.thoroughfare?.lowercased().contains(searchText) == true ||
-                                        place.mapItem.placemark.locality?.lowercased().contains(searchText) == true ||
-                                        place.mapItem.placemark.administrativeArea?.lowercased().contains(searchText) == true
+                                       place.mapItem.placemark.locality?.lowercased().contains(searchText) == true ||
+                                       place.mapItem.placemark.administrativeArea?.lowercased().contains(searchText) == true
                     
                     // Check if the search text matches category names or generic terms
                     let categoryTextMatch = self.matchesCategorySearch(searchText: searchText, place: place)
@@ -337,6 +351,18 @@ class HalfwayViewModel: ObservableObject {
             
             // Update filtered places on main thread
             DispatchQueue.main.async {
+                // This was the main bug - we need to ensure we're preserving our locations and midpoint
+                // during filtering operations, especially with 3+ locations
+                if self.midpoint == nil {
+                    self.calculateMidpointIfPossible()
+                }
+                
+                // Always preserve the locations array even during filtering
+                if self.locations.isEmpty && self.allPlaces.isEmpty {
+                    print("HalfwayViewModel: Warning - empty locations during filtering")
+                }
+                
+                // Apply filtered results
                 self.filteredPlaces = filtered
                 self.isFilteredPlacesLoading = false
                 print("HalfwayViewModel: Filtered places: \(filtered.count) out of \(allPlaces.count)")
@@ -441,6 +467,8 @@ class HalfwayViewModel: ObservableObject {
             self.isSearching = true
             // Don't clear previous results during new search
             self.errorMessage = nil
+            // Reset the no results reason
+            self.noResultsReason = nil
         }
         
         // Cancel any ongoing searches
@@ -496,8 +524,41 @@ class HalfwayViewModel: ObservableObject {
                 self.filterPlacesWithCurrentSettings()
                 self.isSearching = false
                 
-                // Queue directions after search completes
-                self.queueDirectionRequestsForAllLocations()
+                // Check if we found any places
+                if self.allPlaces.isEmpty {
+                    if self.locations.count >= 2 {
+                        // Calculate maximum distance between locations to provide better feedback
+                        let coordinates = self.locations.map { $0.coordinate }
+                        var maxDistance: CLLocationDistance = 0
+                        
+                        for i in 0..<coordinates.count {
+                            for j in (i+1)..<coordinates.count {
+                                let distance = self.locationManager.calculateDistance(
+                                    location1: coordinates[i],
+                                    location2: coordinates[j]
+                                )
+                                maxDistance = max(maxDistance, distance)
+                            }
+                        }
+                        
+                        // Provide a helpful message based on distance
+                        let distanceInKm = maxDistance / 1000.0
+                        if distanceInKm > 50 {
+                            self.noResultsReason = "No places found in between. These locations may be too far apart (over \(Int(distanceInKm))km). Try locations closer together or increase the search radius."
+                        } else if self.searchRadius < 5.0 {
+                            self.noResultsReason = "No places found with current search radius. Try increasing the radius to find more options."
+                        } else {
+                            self.noResultsReason = "No places found between these locations. Try different locations or adjust your search radius."
+                        }
+                    } else if self.locations.count == 1 {
+                        self.noResultsReason = "No places found near this location. Try increasing the search radius or searching for a different area."
+                    }
+                    
+                    print("HalfwayViewModel: No results found. Reason: \(self.noResultsReason ?? "Unknown")")
+                } else {
+                    // Queue directions after search completes
+                    self.queueDirectionRequestsForAllLocations()
+                }
             }
         })
     }

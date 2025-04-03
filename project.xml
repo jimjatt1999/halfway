@@ -558,7 +558,7 @@
 				<key>MARKETING_VERSION</key>
 				<string>1.0</string>
 				<key>PRODUCT_BUNDLE_IDENTIFIER</key>
-				<string>com.zekuro.halfway</string>
+				<string>com.zekuro.halfwayapp</string>
 				<key>PRODUCT_NAME</key>
 				<string>$(TARGET_NAME)</string>
 				<key>SWIFT_EMIT_LOC_STRINGS</key>
@@ -617,7 +617,7 @@
 				<key>MARKETING_VERSION</key>
 				<string>1.0</string>
 				<key>PRODUCT_BUNDLE_IDENTIFIER</key>
-				<string>com.zekuro.halfway</string>
+				<string>com.zekuro.halfwayapp</string>
 				<key>PRODUCT_NAME</key>
 				<string>$(TARGET_NAME)</string>
 				<key>SWIFT_EMIT_LOC_STRINGS</key>

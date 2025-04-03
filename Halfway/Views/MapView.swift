@@ -13,6 +13,7 @@ struct MapView: UIViewRepresentable {
     var isExpanded: Bool = false
     @Binding var resetLocations: Bool  // New binding to track reset request
     var mapType: MKMapType = .standard // Default map type
+    var isMiniMapInResults: Bool = false // New property to identify mini map in results panel
     
     // Added to prevent automatic region changes
     @State private var userInteracted = false
@@ -30,7 +31,8 @@ struct MapView: UIViewRepresentable {
          selectedPlace: Binding<Place?>,
          isExpanded: Bool = false,
          resetLocations: Binding<Bool>,
-         mapType: MKMapType = .standard) {
+         mapType: MKMapType = .standard,
+         isMiniMapInResults: Bool = false) {
         self._region = region
         self.location1 = location1
         self.location2 = location2
@@ -42,6 +44,7 @@ struct MapView: UIViewRepresentable {
         self.isExpanded = isExpanded
         self._resetLocations = resetLocations
         self.mapType = mapType
+        self.isMiniMapInResults = isMiniMapInResults
     }
     
     // New initializer for direct locations array
@@ -53,7 +56,8 @@ struct MapView: UIViewRepresentable {
          selectedPlace: Binding<Place?>,
          isExpanded: Bool = false,
          resetLocations: Binding<Bool>,
-         mapType: MKMapType = .standard) {
+         mapType: MKMapType = .standard,
+         isMiniMapInResults: Bool = false) {
         self._region = region
         self.location1 = locations.count > 0 ? locations[0] : nil
         self.location2 = locations.count > 1 ? locations[1] : nil
@@ -65,6 +69,7 @@ struct MapView: UIViewRepresentable {
         self.isExpanded = isExpanded
         self._resetLocations = resetLocations
         self.mapType = mapType
+        self.isMiniMapInResults = isMiniMapInResults
     }
     
     func makeUIView(context: Context) -> MKMapView {
@@ -126,49 +131,77 @@ struct MapView: UIViewRepresentable {
             return
         }
         
-        // For mini-map, always maintain the same region as the main map
-        if !isExpanded {
-            mapView.setRegion(region, animated: false)
-            context.coordinator.lastExpandedState = isExpanded
-            // Disable user interaction for mini-map to keep it fixed
+        // Configure map interaction based on type
+        if isMiniMapInResults {
+            // Mini map in results panel should be non-interactive
             mapView.isZoomEnabled = false
             mapView.isScrollEnabled = false
             mapView.isRotateEnabled = false
-        } 
-        // Only set region for the main map if user hasn't interacted or isExpanded has changed
-        else if !context.coordinator.userInteracted || context.coordinator.lastExpandedState != isExpanded {
-            if isExpanded {
-                // Calculate region to show all points when in expanded mode
-                var allPoints: [CLLocationCoordinate2D] = []
-                if midpoint != nil {
-                    allPoints.append(midpoint!)
-                }
+            
+            // Always show the midpoint and all locations in mini map
+            if let midpoint = midpoint {
+                var allPoints: [CLLocationCoordinate2D] = [midpoint]
                 
                 // Add all locations' coordinates
-                if let locs = locations {
+                if let locs = locations, !locs.isEmpty {
                     allPoints.append(contentsOf: locs.map { $0.coordinate })
-                } else {
-                    // For backward compatibility
-                if let loc1 = location1?.coordinate { allPoints.append(loc1) }
-                if let loc2 = location2?.coordinate { allPoints.append(loc2) }
+                } else if let loc1 = location1?.coordinate {
+                    allPoints.append(loc1)
+                    if let loc2 = location2?.coordinate {
+                        allPoints.append(loc2)
+                    }
                 }
                 
-                if !allPoints.isEmpty {
-                    let expandedRegion = regionThatFits(coordinates: allPoints)
-                    mapView.setRegion(expandedRegion, animated: true)
-                } else {
-                    mapView.setRegion(region, animated: true)
-                }
-                
-                // Re-enable user interaction for expanded view
-                mapView.isZoomEnabled = true
-                mapView.isScrollEnabled = true
-                mapView.isRotateEnabled = true
+                // Set region to show all points with padding
+                let miniMapRegion = regionThatFits(coordinates: allPoints)
+                mapView.setRegion(miniMapRegion, animated: false)
             } else {
-                mapView.setRegion(region, animated: true)
+                // If no midpoint, just show the region
+                mapView.setRegion(region, animated: false)
             }
+        } else {
+            // Main map (homepage and immersive) should be fully interactive
+            mapView.isZoomEnabled = true
+            mapView.isScrollEnabled = true
+            mapView.isRotateEnabled = true
             
-            context.coordinator.lastExpandedState = isExpanded
+            // Only set region in specific scenarios for main map:
+            // 1. Initial load (userInteracted is false)
+            // 2. Expanded state changes
+            // 3. Explicit reset request
+            let shouldSetRegion = !context.coordinator.userInteracted || 
+                                  context.coordinator.lastExpandedState != isExpanded
+            
+            if shouldSetRegion {
+                if isExpanded && context.coordinator.lastExpandedState != isExpanded {
+                    // Calculate region to show all points when expanding
+                    var allPoints: [CLLocationCoordinate2D] = []
+                    if midpoint != nil {
+                        allPoints.append(midpoint!)
+                    }
+                    
+                    // Add all locations' coordinates
+                    if let locs = locations {
+                        allPoints.append(contentsOf: locs.map { $0.coordinate })
+                    } else {
+                        // For backward compatibility
+                        if let loc1 = location1?.coordinate { allPoints.append(loc1) }
+                        if let loc2 = location2?.coordinate { allPoints.append(loc2) }
+                    }
+                    
+                    if !allPoints.isEmpty {
+                        let expandedRegion = regionThatFits(coordinates: allPoints)
+                        mapView.setRegion(expandedRegion, animated: true)
+                    } else {
+                        mapView.setRegion(region, animated: true)
+                    }
+                } else if !isExpanded && !context.coordinator.userInteracted {
+                    // Only set region on first load of non-expanded map
+                    mapView.setRegion(region, animated: false)
+                }
+                
+                context.coordinator.lastExpandedState = isExpanded
+            }
         }
         
         // Only update annotations if needed
@@ -313,7 +346,7 @@ struct MapView: UIViewRepresentable {
             self.parent = parent
             super.init()
             
-            // Add observer for reset notification
+            // Add observer for reset notification - only reset on explicit request
             notificationObserver = NotificationCenter.default.addObserver(
                 forName: NSNotification.Name("ResetMapInteraction"),
                 object: nil,
@@ -321,21 +354,38 @@ struct MapView: UIViewRepresentable {
             ) { [weak self] _ in
                 self?.userInteracted = false
             }
-        }
-        
-        deinit {
-            // Remove observer when coordinator is deallocated
-            if let observer = notificationObserver {
-                NotificationCenter.default.removeObserver(observer)
+            
+            // Add observer for expanded state changes - but don't reset interaction flag
+            // This allows the map to stay where the user left it
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("MapExpandedStateChanged"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                // No longer resetting userInteracted here to maintain map position
             }
         }
         
+        deinit {
+            // Remove observers when coordinator is deallocated
+            if let observer = notificationObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            
+            // Remove all other observers
+            NotificationCenter.default.removeObserver(self)
+        }
+        
         @objc func handleMapPan(_ gesture: UIPanGestureRecognizer) {
-            userInteracted = true
+            if gesture.state == .began || gesture.state == .changed {
+                userInteracted = true
+            }
         }
         
         @objc func handleMapPinch(_ gesture: UIPinchGestureRecognizer) {
-            userInteracted = true
+            if gesture.state == .began || gesture.state == .changed {
+                userInteracted = true
+            }
         }
         
         @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
@@ -696,10 +746,15 @@ struct MapView: UIViewRepresentable {
         
         // Add this method to update the binding when user moves the map
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-            if userInteracted {
-                DispatchQueue.main.async {
-                    self.parent.region = mapView.region
-                }
+            // User interaction can happen directly through the map view
+            // even without our gesture recognizers catching it
+            if mapView.isZoomEnabled && mapView.isScrollEnabled {
+                userInteracted = true
+            }
+            
+            // Update the parent's region binding
+            DispatchQueue.main.async {
+                self.parent.region = mapView.region
             }
         }
         

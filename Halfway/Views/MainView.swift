@@ -48,7 +48,21 @@ struct MainView: View {
         "Searching for common ground...",
         "Finding places in between...",
         "Connecting the dots...",
-        "Somewhere in the middle..."
+        "Somewhere in the middle...",
+        "Splitting the difference...",
+        "Making sure you don't have to go all the way...",
+        "Doing math so you don't have to...",
+        "Finding places where nobody has to drive too far...",
+        "Calculating the exact center of your friendship...",
+        "Using advanced algorithms to avoid arguments...",
+        "Making sure it's fair for everyone...",
+        "Balancing the universe perfectly, as all things should be...",
+        "Convincing GPS satellites to work together...",
+        "Teaching maps to understand compromise...",
+        "The app equivalent of saying 'let's meet in the middle'...",
+        "Preventing 'but your place is closer' debates since 2023...",
+        "Drawing a line between you both and finding the good stuff...",
+        "Creating peace and harmony through equidistant meetups..."
     ]
     
     // Tutorial tooltip state
@@ -140,6 +154,13 @@ struct MainView: View {
                                 withAnimation(.spring(duration: 0.3)) {
                                     isExpanded.toggle()
                                 }
+                                // Notify MapView about expanded state change
+                                DispatchQueue.main.async {
+                                    NotificationCenter.default.post(
+                                        name: NSNotification.Name("MapExpandedStateChanged"),
+                                        object: nil
+                                    )
+                                }
                             }) {
                                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                                     .font(.headline)
@@ -162,7 +183,8 @@ struct MainView: View {
                     Spacer()
                     
                     // Content panel at the bottom
-                    if (viewModel.midpoint == nil || viewModel.filteredPlaces.isEmpty) && 
+                    if (viewModel.midpoint == nil || 
+                        (viewModel.filteredPlaces.isEmpty && viewModel.selectedCategory == nil && viewModel.noResultsReason == nil)) && 
                        viewModel.searchText.isEmpty && // Only show search panel when not actively searching
                        !viewModel.isSearching { // Make sure we're not in the middle of a search
                         // Redesigned floating search panel
@@ -184,6 +206,7 @@ struct MainView: View {
                         .transition(.opacity)
                         .animation(.spring(), value: viewModel.filteredPlaces)
                         .animation(.spring(), value: searchText)
+                        .animation(.spring(), value: viewModel.noResultsReason)
                         // Add anchor for search radius slider
                         .anchorPreference(key: ViewAnchorKey.self, value: .center) { anchor in
                             [ViewAnchorKey.ID.searchRadius: anchor]
@@ -876,6 +899,9 @@ struct ResultsPanel: View {
     // Add isFullScreen state variable to ResultsPanel
     @State private var isFullScreen = false
     
+    // Add this near the beginning of the ResultsPanel View
+    @State private var showNoResultsAlert = false
+    
     init(viewModel: HalfwayViewModel, 
          resetLocations: Binding<Bool>,
          mapRegion: Binding<MKCoordinateRegion>,
@@ -897,146 +923,177 @@ struct ResultsPanel: View {
     }
     
     var body: some View {
+        // Put everything in a single VStack that gets the offset
         VStack(spacing: 0) {
-            // Floating card similar to search panel (not stretched to edges)
+            // Content container with background and shadow
             VStack(spacing: 0) {
-                // Only show the header and minimap when not actively searching or keyboard is not visible
-                // and when not in full-screen mode
-                if !isKeyboardVisible && !isFullScreen {
-                headerView
-                } else if isFullScreen {
-                    // Custom header for full-screen mode
-                    HStack {
-                        Button(action: {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                isFullScreen = false
-                            }
-                        }) {
-                            Image(systemName: "chevron.down")
-                                .foregroundColor(.primary)
-                                .padding(10)
-                                .background(Color(UIColor.tertiarySystemBackground))
-                                .clipShape(Circle())
+                // Enhanced drag indicator - make it more visible and add feedback
+                VStack(spacing: 0) {
+                    Capsule()
+                        .fill(Color.gray.opacity(0.5))
+                        .frame(width: 50, height: 5)
+                        .padding(.vertical, 8)
+                }
+                .frame(maxWidth: .infinity)
+                .background(Color(UIColor.systemBackground).opacity(0.01)) // Nearly invisible background to increase tap area
+                .contentShape(Rectangle()) // Make entire area tappable
+                .onTapGesture {
+                    // Add a direct tap-to-dismiss option on the drag indicator
+                    if !isFullScreen {
+                        withAnimation(.spring()) {
+                            // Clear places but keep locations
+                            viewModel.filteredPlaces = []
+                            viewModel.places = []
+                            // Clear the selected category when dismissed
+                            viewModel.selectedCategory = nil
+                            // Clear search text
+                            searchText = ""
+                            viewModel.searchText = ""
+                            // Also clear the noResultsReason
+                            viewModel.noResultsReason = nil
                         }
-                        
-                        Spacer()
-                        
-                        VStack(spacing: 4) {
-                            Text("\(viewModel.filteredPlaces.count) places found")
-                                .font(.headline)
-                                .fontWeight(.bold)
-                            
-                            if viewModel.locations.count > 0 {
-                                Text("\(viewModel.locations.count) locations selected")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            if !searchText.isEmpty {
-                                searchText = ""
-                                viewModel.searchText = ""
-                                viewModel.filterPlacesWithCurrentSettings()
-                            }
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(searchText.isEmpty ? .clear : .gray)
-                                .padding(10)
-                                .background(searchText.isEmpty ? Color.clear : Color(UIColor.tertiarySystemBackground))
-                                .clipShape(Circle())
-                                .opacity(searchText.isEmpty ? 0 : 1)
-                        }
-                        .disabled(searchText.isEmpty)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
-                    .padding(.bottom, 10)
                 }
                 
-                searchBarView
-                
-                // Only show these components when keyboard is not visible and not in full-screen mode
-                if !isKeyboardVisible && !isFullScreen {
-                miniMapView
-                radiusControlView
-                    // Only show category filter when not actively searching
-                    if !isActivelySearching {
-                categorySelectionView
-                    }
-                } else if isFullScreen && !isKeyboardVisible {
-                    // When in full-screen mode, show radius and category controls in a more compact layout
-                    HStack(spacing: 16) {
-                        // Compact radius control
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Radius: \(viewModel.searchRadius, specifier: "%.1f") km")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            Slider(value: Binding(
-                                get: { viewModel.searchRadius },
-                                set: { viewModel.updateSearchRadius($0) }
-                            ), in: 0.5...viewModel.maxSearchRadius, step: 0.1)
-                            .frame(width: 140)
-                            .accentColor(Color(.systemGray3))
-                        }
-                        
-                        Divider()
-                            .frame(height: 30)
-                        
-                        // Category selection as a horizontal scroll
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                Button(action: {
-                                    viewModel.selectedCategory = nil
-                                    viewModel.filterPlacesWithCurrentSettings()
-                                }) {
-                                    Text("All")
-                                        .font(.caption)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(viewModel.selectedCategory == nil ? Color.accentColor : Color(.systemGray6))
-                                        )
-                                        .foregroundColor(viewModel.selectedCategory == nil ? .white : .primary)
+                // Floating card similar to search panel (not stretched to edges)
+                VStack(spacing: 0) {
+                    // Only show the header and minimap when not actively searching or keyboard is not visible
+                    if !isKeyboardVisible && !isFullScreen {
+                        headerView
+                    } else if isFullScreen {
+                        // Custom header for full-screen mode
+                        HStack {
+                            Button(action: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    isFullScreen = false
                                 }
+                            }) {
+                                Image(systemName: "chevron.down")
+                                    .foregroundColor(.primary)
+                                    .padding(10)
+                                    .background(Color(UIColor.tertiarySystemBackground))
+                                    .clipShape(Circle())
+                            }
+                            
+                            Spacer()
+                            
+                            VStack(spacing: 4) {
+                                Text("\(viewModel.filteredPlaces.count) places found")
+                                    .font(.headline)
+                                    .fontWeight(.bold)
                                 
-                                ForEach(PlaceCategory.allCases, id: \.self) { category in
+                                if viewModel.locations.count > 0 {
+                                    Text("\(viewModel.locations.count) locations selected")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                if !searchText.isEmpty {
+                                    searchText = ""
+                                    viewModel.searchText = ""
+                                    viewModel.filterPlacesWithCurrentSettings()
+                                }
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(searchText.isEmpty ? .clear : .gray)
+                                    .padding(10)
+                                    .background(searchText.isEmpty ? Color.clear : Color(UIColor.tertiarySystemBackground))
+                                    .clipShape(Circle())
+                                    .opacity(searchText.isEmpty ? 0 : 1)
+                            }
+                            .disabled(searchText.isEmpty)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
+                        .padding(.bottom, 10)
+                    }
+                    
+                    searchBarView
+                    
+                    // Only show these components when keyboard is not visible and not in full-screen mode
+                    if !isKeyboardVisible && !isFullScreen {
+                        miniMapView
+                        radiusControlView
+                        // Only show category filter when not actively searching
+                        if !isActivelySearching {
+                            categorySelectionView
+                        }
+                    } else if isFullScreen && !isKeyboardVisible {
+                        // When in full-screen mode, show radius and category controls in a more compact layout
+                        HStack(spacing: 16) {
+                            // Compact radius control
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Radius: \(viewModel.searchRadius, specifier: "%.1f") km")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Slider(value: Binding(
+                                    get: { viewModel.searchRadius },
+                                    set: { viewModel.updateSearchRadius($0) }
+                                ), in: 0.5...viewModel.maxSearchRadius, step: 0.1)
+                                .frame(width: 140)
+                                .accentColor(Color(.systemGray3))
+                            }
+                            
+                            Divider()
+                                .frame(height: 30)
+                            
+                            // Category selection as a horizontal scroll
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
                                     Button(action: {
-                                        viewModel.filterByCategory(category)
+                                        viewModel.selectedCategory = nil
+                                        viewModel.filterPlacesWithCurrentSettings()
                                     }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: category.icon)
-                                                .font(.system(size: 10))
-                                            Text(category.rawValue)
-                                                .font(.caption)
+                                        Text("All")
+                                            .font(.caption)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .fill(viewModel.selectedCategory == nil ? Color.accentColor : Color(.systemGray6))
+                                            )
+                                            .foregroundColor(viewModel.selectedCategory == nil ? .white : .primary)
+                                    }
+                                    
+                                    ForEach(PlaceCategory.allCases, id: \.self) { category in
+                                        Button(action: {
+                                            viewModel.filterByCategory(category)
+                                        }) {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: category.icon)
+                                                    .font(.system(size: 10))
+                                                Text(category.rawValue)
+                                                    .font(.caption)
+                                            }
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 5)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .fill(viewModel.selectedCategory == category ? Color.accentColor : Color(.systemGray6))
+                                            )
+                                            .foregroundColor(viewModel.selectedCategory == category ? .white : .primary)
                                         }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(viewModel.selectedCategory == category ? Color.accentColor : Color(.systemGray6))
-                                        )
-                                        .foregroundColor(viewModel.selectedCategory == category ? .white : .primary)
                                     }
                                 }
                             }
                         }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                }
-                
-                // Adjusted placeListView that adapts based on keyboard visibility and full-screen mode
-                if isKeyboardVisible {
-                    // When keyboard is visible, only show search results in a more compact form
-                    placeListViewCompact
-                } else {
-                    // Regular place list view when keyboard is not visible
-                placeListView
+                    
+                    // Adjusted placeListView that adapts based on keyboard visibility and full-screen mode
+                    if isKeyboardVisible {
+                        // When keyboard is visible, only show search results in a more compact form
+                        placeListViewCompact
+                    } else {
+                        // Regular place list view when keyboard is not visible
+                        placeListView
+                    }
                 }
             }
             .background(
@@ -1045,12 +1102,9 @@ struct ResultsPanel: View {
                     .shadow(color: Color.black.opacity(isFullScreen ? 0 : 0.2), radius: 10, x: 0, y: -5)
             )
             .offset(y: dragState.height)
-            // Add drag gesture to allow returning to search, but disable in full-screen mode
             .gesture(isFullScreen ? nil : dragGesture)
-            // Apply animation for smoother transitions
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isFullScreen)
         }
-        // Adjust height and edges based on full-screen mode
+        // Keep these modifiers outside the nested VStack
         .frame(maxHeight: isFullScreen ? UIScreen.main.bounds.height : 
                             (isKeyboardVisible ? min(UIScreen.main.bounds.height * 0.5, 350) : UIScreen.main.bounds.height * 0.9))
         .edgesIgnoringSafeArea(isFullScreen ? .all : .bottom)
@@ -1086,17 +1140,38 @@ struct ResultsPanel: View {
                     }
                 }
         )
+        // Add back the animation modifiers
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isFullScreen)
+        .animation(.spring(), value: dragState)
+        // Also in the body of ResultsPanel, add this alert to the view hierarchy at the end:
+        .onChange(of: viewModel.noResultsReason) { reason in
+            showNoResultsAlert = reason != nil
+        }
+        .alert(isPresented: $showNoResultsAlert) {
+            Alert(
+                title: Text("No Places Found"),
+                message: Text(viewModel.noResultsReason ?? ""),
+                dismissButton: .default(Text("Got it"))
+            )
+        }
     }
     
     // MARK: - Component Views
     
     private var headerView: some View {
-            HStack {
+        HStack {
             Button(action: {
-                withAnimation {
+                withAnimation(.spring()) {
                     // Clear places and return to search
                     viewModel.filteredPlaces = []
                     viewModel.places = []
+                    // Clear any selected category
+                    viewModel.selectedCategory = nil
+                    // Clear search text
+                    searchText = ""
+                    viewModel.searchText = ""
+                    // Also clear the noResultsReason to ensure we go back to search panel
+                    viewModel.noResultsReason = nil
                 }
             }) {
                 Image(systemName: "chevron.left")
@@ -1105,14 +1180,20 @@ struct ResultsPanel: View {
                     .background(Color(UIColor.tertiarySystemBackground))
                     .clipShape(Circle())
             }
-                
-                    Spacer()
+            
+            Spacer()
             
             VStack(spacing: 4) {
                 // Results header with count
-                Text("\(viewModel.filteredPlaces.count) places found")
-                    .font(.headline)
-                    .fontWeight(.bold)
+                if viewModel.filteredPlaces.isEmpty && viewModel.noResultsReason != nil {
+                    Text("0 places found")
+                        .font(.headline)
+                        .fontWeight(.bold)
+                } else {
+                    Text("\(viewModel.filteredPlaces.count) places found")
+                        .font(.headline)
+                        .fontWeight(.bold)
+                }
                 
                 // Show the number of locations with more context
                 if viewModel.locations.isEmpty {
@@ -1131,8 +1212,8 @@ struct ResultsPanel: View {
             }
             
             Spacer()
-            }
-            .padding(.horizontal, 20)
+        }
+        .padding(.horizontal, 20)
         .padding(.top, 20)
         .padding(.bottom, 10)
     }
@@ -1141,8 +1222,8 @@ struct ResultsPanel: View {
     private var searchBarView: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.gray)
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
                     .padding(.leading, 2)
                 
                 TextField("Search", text: $searchText, onEditingChanged: { isEditing in
@@ -1240,7 +1321,8 @@ struct ResultsPanel: View {
                         ),
                         isExpanded: false,
                         resetLocations: $resetLocations,
-                        mapType: mapType)
+                        mapType: mapType,
+                        isMiniMapInResults: true)  // Set to true for mini map in results panel
                     .frame(height: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
@@ -1328,14 +1410,14 @@ struct ResultsPanel: View {
                         icon: "line.3.horizontal.decrease.circle",
                         isSelected: viewModel.selectedCategory == nil,
                         action: {
-                    viewModel.selectedCategory = nil
+                            viewModel.selectedCategory = nil
                             previousCategory = nil
-                    viewModel.filterPlacesWithCurrentSettings()
-                }
+                            viewModel.filterPlacesWithCurrentSettings()
+                        }
                     )
-                
+                    
                     // Category Buttons
-                ForEach(PlaceCategory.allCases, id: \.self) { category in
+                    ForEach(PlaceCategory.allCases, id: \.self) { category in
                         CategoryFilterButton(
                             title: category.rawValue,
                             icon: category.icon,
@@ -1465,11 +1547,39 @@ struct ResultsPanel: View {
                         }
                         .padding(.top, 8)
                     } else {
-                    Text("No matching places found")
+                    Text(viewModel.noResultsReason ?? "No matching places found")
                         .foregroundColor(.secondary)
-                    Text("Try adjusting your search or filters")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 20)
+                        .fixedSize(horizontal: false, vertical: true)
+                    
+                    if viewModel.selectedCategory != nil {
+                        VStack(spacing: 8) {
+                            Text("Try increasing the search radius or selecting a different category")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                            
+                            Button(action: {
+                                viewModel.selectedCategory = nil
+                                viewModel.filterPlacesWithCurrentSettings()
+                            }) {
+                                Text("Clear Category Filter")
+                                    .font(.subheadline)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.black.opacity(0.8))
+                                    )
+                            }
+                        }
+                    } else {
+                        Text("Try adjusting your search or filters")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     }
                 }
                 .padding(.vertical, 40)
@@ -1499,7 +1609,7 @@ struct ResultsPanel: View {
                 if isActivelySearching {
                     // Very compact "no results" view
                     HStack {
-                        Text("No matches found")
+                        Text(viewModel.noResultsReason != nil ? "No places found" : "No matches found")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                         
@@ -1580,6 +1690,17 @@ struct ResultsPanel: View {
                     }
                     .frame(maxHeight: 240)
                 }
+            }
+            
+            // After this HStack, add this conditional view to show the reason
+            if let reason = viewModel.noResultsReason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 15)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .background(
@@ -1670,13 +1791,20 @@ struct ResultsPanel: View {
             }
             .onEnded { value in
                 isDragging = false
+                
                 // If dragged down far enough, return to search screen
-                if dragState.height > 100 {
+                if dragState.height > 80 { // Reduced threshold to make it easier to dismiss
                     withAnimation(.spring()) {
                         // Clear places but keep locations
                         viewModel.filteredPlaces = []
                         viewModel.places = []
-                        // Don't modify search text when dragging
+                        // Clear the selected category when dismissed
+                        viewModel.selectedCategory = nil
+                        // Clear search text
+                        searchText = ""
+                        viewModel.searchText = ""
+                        // Also clear the noResultsReason to ensure we go back to search panel
+                        viewModel.noResultsReason = nil
                     }
                 } else {
                     // Snap back

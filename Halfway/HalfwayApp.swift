@@ -56,7 +56,20 @@ struct LaunchScreenView: View {
         "The smart way to meet up",
         "Halfway there, everywhere",
         "Bringing people together",
-        "Meeting made simple"
+        "Meeting made simple",
+        "Split the distance, double the fun",
+        "Where friends meet in the middle",
+        "No more 'your place or mine' debates",
+        "Because nobody likes to travel too far",
+        "Meet in the middle, without the math",
+        "Fair is fair, and we'll prove it",
+        "Making friendships more equidistant",
+        "When compromise is just a tap away",
+        "Because geography shouldn't decide who drives",
+        "The Switzerland of meetup apps",
+        "Perfectly balanced, as all things should be",
+        "Where distance is just a number we divide by two",
+        "Because 'halfway' is the fairest four-letter word"
     ]
     
     private var randomTagline: String {
