@@ -336,7 +336,7 @@ struct MainView: View {
                 }
             }
             
-            // Update loading overlay with blur effect instead of blue
+            // Update loading overlay with enhanced animations
             if viewModel.isSearching {
                 ZStack {
                     // Blur background effect
@@ -345,9 +345,10 @@ struct MainView: View {
                         .edgesIgnoringSafeArea(.all)
                     
                     // Dark overlay for better text contrast
-                Color.black.opacity(0.5)
-                    .edgesIgnoringSafeArea(.all)
+                    Color.black.opacity(0.5)
+                        .edgesIgnoringSafeArea(.all)
                 }
+                .transition(.opacity.animation(.easeInOut(duration: 0.3)))
                 
                 VStack(spacing: 20) {
                     // Animated title for loading state
@@ -366,20 +367,24 @@ struct MainView: View {
                             .scaleEffect(titleScale)
                             .opacity(titleOpacity)
                     }
+                    .padding(.bottom, 5)
                     
                     // Add a subtitle that cycles through different alternatives
                     Text(loadingSubtitles[currentSubtitleIndex])
                         .font(.system(size: 18, weight: .medium))
                         .foregroundColor(.white.opacity(0.9))
                         .opacity(subtitleOpacity)
-                        .transition(.opacity)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        .id("subtitle-\(currentSubtitleIndex)") // Force view recreation for animation
                     
-                    // Improved progress indicator
-                ProgressView()
+                    // Improved progress indicator with pulsing animation
+                    ProgressView()
                         .scaleEffect(1.5)
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .padding(.top, 10)
+                        .modifier(PulseAnimation())
                 }
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 .onAppear {
                     // Start animations when loading begins
                     animateLoadingTitle()
@@ -387,7 +392,7 @@ struct MainView: View {
                 }
             }
             
-            // Add the tutorial manager
+            // Add the tutorial manager with smooth transitions
             if showTutorialManager {
                 FloatingTutorialManager(
                     mapExpandAnchor: mapExpandButtonAnchor,
@@ -395,8 +400,63 @@ struct MainView: View {
                     filterResultsAnchor: filterButtonAnchor,
                     searchRadiusAnchor: searchRadiusAnchor
                 )
+                .transition(.opacity.animation(.easeInOut(duration: 0.5)))
             }
         }
+        
+        // Function to animate the loading subtitle rotation
+        private func startSubtitleAnimation() {
+            // Animate subtitle changes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                guard viewModel.isSearching else { return }
+                
+                withAnimation(.easeInOut(duration: 0.6)) {
+                    subtitleOpacity = 0
+                }
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    currentSubtitleIndex = (currentSubtitleIndex + 1) % loadingSubtitles.count
+                    
+                    withAnimation(.easeInOut(duration: 0.6)) {
+                        subtitleOpacity = 1.0
+                    }
+                    
+                    // Continue cycle if still loading
+                    if viewModel.isSearching {
+                        startSubtitleAnimation()
+                    }
+                }
+            }
+        }
+        
+        // Create a pulse animation for the loading spinner
+        struct PulseAnimation: ViewModifier {
+            @State private var pulsate = false
+            
+            func body(content: Content) -> some View {
+                content
+                    .scaleEffect(pulsate ? 1.05 : 1.0)
+                    .opacity(pulsate ? 1.0 : 0.9)
+                    .onAppear {
+                        withAnimation(Animation.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                            pulsate = true
+                        }
+                    }
+            }
+        }
+        
+        // Add a SlideTransition modifier for Results panel
+        struct SlideTransition: ViewModifier {
+            var isActive: Bool
+            
+            func body(content: Content) -> some View {
+                content
+                    .offset(y: isActive ? 0 : 30)
+                    .opacity(isActive ? 1.0 : 0.0)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
+            }
+        }
+        
         .sheet(isPresented: $isLocationSearching) {
             LocationSearchView(searchText: "", onLocationSelected: { location in
                 if searchFor < viewModel.locations.count {
@@ -606,7 +666,50 @@ struct MainView: View {
         }
     }
     
-    // Redesigned floating search panel
+    // Add animations to category filters
+    private var categoryFilters: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(PlaceCategory.allCases, id: \.self) { category in
+                    let isSelected = viewModel.selectedCategory == category
+                    Button(action: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                            viewModel.filterByCategory(category)
+                        }
+                    }) {
+                        VStack(spacing: 6) {
+                            Image(systemName: category.iconName)
+                                .font(.system(size: isSelected ? 18 : 16))
+                                .foregroundColor(isSelected ? .white : .secondary)
+                                .frame(width: 40, height: 40)
+                                .background(
+                                    Circle()
+                                        .fill(isSelected ? Color.accentColor : Color(.systemGray6))
+                                )
+                                .overlay(
+                                    Circle()
+                                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                                        .scaleEffect(isSelected ? 1.1 : 1.0)
+                                        .opacity(isSelected ? 0.7 : 0)
+                                )
+                                .scaleEffect(isSelected ? 1.1 : 1.0)
+                            
+                            Text(category.displayName)
+                                .font(.caption)
+                                .foregroundColor(isSelected ? .primary : .secondary)
+                        }
+                    }
+                    .buttonStyle(ScaleButtonStyle())
+                    .contentShape(Rectangle())
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+        }
+    }
+    
+    // Redesigned floating search panel with animations
     var searchPanel: some View {
         VStack(spacing: 16) {
             // Modern card design with shadow and blur background
@@ -627,13 +730,20 @@ struct MainView: View {
                             location: location,
                             isNewLocation: isNewLocation
                         )
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.95).combined(with: .opacity).animation(.spring(response: 0.4, dampingFraction: 0.7)),
+                            removal: .opacity.animation(.easeOut(duration: 0.2))
+                        ))
                     }
                 }
+                .animation(.spring(response: 0.4, dampingFraction: 0.7), value: viewModel.locations.count)
                 
                 // Find Meeting Places button with clean Apple-style
                 FindMeetingPlacesButton(isDisabled: viewModel.locations.isEmpty) {
                     // Only search when button is explicitly clicked
-                    viewModel.searchPlacesAroundMidpoint()
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                        viewModel.searchPlacesAroundMidpoint()
+                    }
                 }
             }
             .padding(20)
@@ -644,6 +754,66 @@ struct MainView: View {
             )
             .padding(.horizontal, 20)
             .padding(.bottom, 25)
+        }
+        .transition(.asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .opacity
+        ))
+    }
+    
+    // Add a custom button style for subtle scale animations
+    struct ScaleButtonStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.92 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
+        }
+    }
+    
+    // FindMeetingPlacesButton with animated feedback
+    struct FindMeetingPlacesButton: View {
+        var isDisabled: Bool
+        var action: () -> Void
+        @State private var isPressed = false
+        
+        var body: some View {
+            Button(action: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                    isPressed = true
+                    
+                    // Provide haptic feedback
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                    
+                    // Reset pressed state after a delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                            isPressed = false
+                        }
+                        action()
+                    }
+                }
+            }) {
+                HStack {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.headline)
+                        .padding(.trailing, 2)
+                    
+                    Text("Find Meeting Places")
+                        .font(.headline)
+                }
+                .foregroundColor(.white)
+                .frame(height: 50)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isDisabled ? Color.gray : Color.accentColor)
+                        .shadow(color: isDisabled ? Color.clear : Color.accentColor.opacity(0.4), radius: isPressed ? 2 : 5, x: 0, y: isPressed ? 1 : 3)
+                )
+                .scaleEffect(isPressed ? 0.97 : 1.0)
+            }
+            .disabled(isDisabled)
+            .opacity(isDisabled ? 0.6 : 1.0)
         }
     }
     
@@ -1107,6 +1277,497 @@ struct ResultsPanel: View {
                             
                             Divider()
                                 .frame(height: 30)
+                            Hang detected: 2.86s (debugger attached, not reporting)
+                            App is being debugged, do not track this hang
+                            Hang detected: 1.09s (debugger attached, not reporting)
+                            App is being debugged, do not track this hang
+                            Hang detected: 0.32s (debugger attached, not reporting)
+                            Location result: 'Saint Helena, Ascension and Tristan da Cunha ' (Score: 6)
+                            Location result: 'Värmland County' (Score: 8)
+                            Location result: 'SHK' (Score: 22)
+                              - Category: MKPOICategoryGasStation
+                            Location result: 'Suk' (Score: 11)
+                            Location result: 'Sukhum Coffee' (Score: 22)
+                              - Category: MKPOICategoryCafe
+                            Location result: 'Khaomankai Yommarat Sukhum' (Score: 16)
+                              - Category: MKPOICategoryRestaurant
+                            Location result: 'Sukum Navapan Uppathum School' (Score: 22)
+                              - Category: MKPOICategorySchool
+                            Result accumulator timeout: 0.250000, exceeded.
+                            Location result: 'Sukhumvit' (Score: 11)
+                            No matching attribution source found for com.wcities
+                            Error loading attribution info for identifier com.wcities from geod: Error Domain=GEOErrorDomain Code=-8 "No matching attribution source found for com.wcities" UserInfo={NSDebugDescription=No matching attribution source found for com.wcities}
+                            HalfwayViewModel: Filtered places: 66 out of 66
+                            Unable to open mach-O at path: /Library/Caches/com.apple.xbs/Binaries/RenderBox/install/Root/System/Library/PrivateFrameworks/RenderBox.framework/default.metallib  Error:2
+                            HalfwayViewModel: Filtered places: 0 out of 66
+                            HalfwayViewModel: Filtered places: 5 out of 66
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 25 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 25;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=25, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            No matching attribution source found for com.wcities
+                            Error loading attribution info for identifier com.wcities from geod: Error Domain=GEOErrorDomain Code=-8 "No matching attribution source found for com.wcities" UserInfo={NSDebugDescription=No matching attribution source found for com.wcities}
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 25 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 25;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=25, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 25 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 25;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=25, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 25 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 25;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=25, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 24 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 24;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=24, requestKind=769}
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 24 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 24;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=24, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 24 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 24;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=24, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 24 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 24;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=24, requestKind=769}
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 24 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 24;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=24, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Throttled "PlaceRequest.REQUEST_TYPE_SEARCH" request: Tried to make more than 50 requests in 60 seconds, will reset in 24 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20301/short(default/any)";
+                                    timeUntilReset = 24;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=PlaceRequest.REQUEST_TYPE_SEARCH, timeUntilReset=24, requestKind=769}
+                            Search error: The operation couldn’t be completed. (MKErrorDomain error 3.)
+                            Rate limit approaching, waiting 53.560940980911255 seconds
+                            HalfwayViewModel: Filtered places: 9 out of 129
+                            HalfwayViewModel: Filtered places: 6 out of 129
+                            HalfwayViewModel: Filtered places: 12 out of 129
+                            HalfwayViewModel: Filtered places: 102 out of 129
+                            HalfwayViewModel: Filtered places: 129 out of 129
+                            HalfwayViewModel: Filtered places: 0 out of 129
+                            HalfwayViewModel: Filtered places: 9 out of 129
+                            No matching attribution source found for com.wcities
+                            Error loading attribution info for identifier com.wcities from geod: Error Domain=GEOErrorDomain Code=-8 "No matching attribution source found for com.wcities" UserInfo={NSDebugDescription=No matching attribution source found for com.wcities}
+                            HalfwayViewModel: Filtered places: 13 out of 194
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 35 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 35;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=35, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 35 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 35;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=35, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 35 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 35;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=35, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 34 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 34;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=34, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 34 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 34;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=34, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 34 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 34;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=34, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 34 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 34;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=34, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 33 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 33;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=33, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 33 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 33;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=33, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 33 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 33;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=33, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 32 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 32;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=32, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 32 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 32;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=32, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 32 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 32;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=32, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 32 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 32;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=32, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 31 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 31;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=31, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 31 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 31;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=31, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 31 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 31;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=31, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 30 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 30;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=30, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 30 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 30;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=30, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 30 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 30;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=30, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 30 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 30;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=30, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 30 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 30;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=30, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 29 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 29;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=29, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 29 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 29;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=29, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 29 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 29;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=29, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 29 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 29;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=29, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 28 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 28;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=28, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 28 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 28;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=28, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 28 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 28;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=28, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 28 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 28;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=28, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            -[RTIInputSystemClient remoteTextInputSessionWithID:performInputOperation:]  perform input operation requires a valid sessionID. inputModality = Keyboard, inputOperation = dismissAutoFillPanel, customInfoType = UIUserInteractionRemoteInputOperations
+                            -[RTIInputSystemClient remoteTextInputSessionWithID:performInputOperation:]  perform input operation requires a valid sessionID. inputModality = Keyboard, inputOperation = dismissAutoFillPanel, customInfoType = UIUserInteractionRemoteInputOperations
+                            -[RTIInputSystemClient remoteTextInputSessionWithID:performInputOperation:]  perform input operation requires a valid sessionID. inputModality = Keyboard, inputOperation = dismissAutoFillPanel, customInfoType = UIUserInteractionRemoteInputOperations
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 28 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 28;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=28, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 28 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 28;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=28, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 27 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 27;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=27, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 27 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 27;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=27, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 27 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
+                                    {
+                                    intervalType = short;
+                                    maxRequests = 50;
+                                    "throttler.keyPath" = "app:com.zekuro.halfwayapp/0x20200/short(default/any)";
+                                    timeUntilReset = 27;
+                                    windowSize = 60;
+                                }
+                            ), requestKindString=Directions, timeUntilReset=27, requestKind=512}
+                            Direction calculation error: Directions Not Available
+                            Throttled "Directions" request: Tried to make more than 50 requests in 60 seconds, will reset in 27 seconds - Error Domain=GEOErrorDomain Code=-3 "(null)" UserInfo={details=(
                             
                             // Category selection as a horizontal scroll
                             ScrollView(.horizontal, showsIndicators: false) {
@@ -1545,7 +2206,7 @@ struct ResultsPanel: View {
         }
     }
     
-    // Modify the placeListView to add a more visible expand button and handle full-screen mode
+    // Modify the placeListView to handle more results efficiently
     private var placeListView: some View {
         VStack(spacing: 0) {
             HStack {
@@ -1591,6 +2252,7 @@ struct ResultsPanel: View {
             .padding(.bottom, 8)
             
             if viewModel.filteredPlaces.isEmpty {
+                // Empty state view (unchanged)
                 VStack(spacing: 16) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 24))
@@ -1662,18 +2324,56 @@ struct ResultsPanel: View {
                 .padding(.vertical, 40)
                 .padding(.horizontal, 20)
             } else {
+                // Optimized list view with lazy loading for better performance with many results
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(viewModel.filteredPlaces, id: \.id) { place in
+                        // Use ForEach with chunked array for better performance
+                        ForEach(0..<min(viewModel.filteredPlaces.count, isFullScreen ? viewModel.filteredPlaces.count : 30), id: \.self) { index in
+                            let place = viewModel.filteredPlaces[index]
                             PlaceRow(place: place, midpoint: viewModel.midpoint)
                                 .onTapGesture {
                                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                                     viewModel.showingPlaceDetail = place
                                 }
+                                .id(place.id) // Ensure each row has a stable identity
+                                // Add staggered animation for each row
+                                .transition(.asymmetric(
+                                    insertion: .scale(scale: 0.9).combined(with: .opacity).animation(.spring(response: 0.35, dampingFraction: 0.7).delay(Double(index) * 0.03)),
+                                    removal: .opacity.animation(.easeOut(duration: 0.2))
+                                ))
+                                // Add subtle hover effect on tap
+                                .buttonStyle(PlaceRowButtonStyle())
+                        }
+                        
+                        // Show "Load More" button if there are more results and not in full screen mode
+                        if viewModel.filteredPlaces.count > 30 && !isFullScreen {
+                            Button(action: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    isFullScreen = true
+                                }
+                            }) {
+                                HStack {
+                                    Text("Show all \(viewModel.filteredPlaces.count) results")
+                                        .font(.subheadline)
+                                        .foregroundColor(.white)
+                                    
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.white)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.accentColor)
+                                .cornerRadius(8)
+                            }
+                            .padding(.top, 10)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: viewModel.filteredPlaces.count)
                         }
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, isFullScreen ? 100 : 20) // Add extra padding at bottom when in full screen
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isFullScreen) // Animate padding changes
                 }
             }
         }
@@ -2172,4 +2872,14 @@ struct BlurView: UIViewRepresentable {
 // Add a background tap gesture to dismiss the keyboard
 func hideKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
+// Custom button style for place rows with a subtle hover effect
+struct PlaceRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
+            .brightness(configuration.isPressed ? -0.03 : 0)
+    }
 } 
